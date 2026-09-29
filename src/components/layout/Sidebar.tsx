@@ -1,0 +1,611 @@
+import React, { useState } from 'react';
+import { useApp } from '../../context/AppContext';
+import { MenuId } from '../../types';
+import {
+  LayoutDashboard,
+  Calculator,
+  Database,
+  Package,
+  Layers,
+  Factory,
+  TrendingUp,
+  Percent,
+  Warehouse,
+  ShoppingCart,
+  PieChart,
+  SlidersHorizontal,
+  Scale,
+  FileBarChart,
+  Settings,
+  User,
+  Users,
+  Shield,
+  FileSpreadsheet,
+  DownloadCloud,
+  RotateCcw,
+  History,
+  BookOpen,
+  LogOut,
+  ChevronDown,
+  ChevronRight,
+  Tag,
+  DollarSign,
+  Building,
+  Zap,
+} from 'lucide-react';
+
+interface SidebarProps {
+  onCloseMobile?: () => void;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
+  const { currentMenu, setCurrentMenu, rawMaterials, products, boms, batches } = useApp();
+
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    sec1: true,
+    sec2: true,
+    sec3: true,
+    sec4: true,
+    sec5: true,
+    sec6: true,
+    sec7: true,
+    sec8: false,
+    sec84: false,
+  });
+
+  const toggleSection = (sec: string) => {
+    setExpandedSections((prev) => ({ ...prev, [sec]: !prev[sec] }));
+  };
+
+  const handleMenuClick = (menuId: MenuId) => {
+    setCurrentMenu(menuId);
+    if (onCloseMobile) onCloseMobile();
+  };
+
+  const lowStockCount = rawMaterials.filter((m) => m.currentStock <= m.minStock).length;
+  const inProgressBatches = batches.filter((b) => b.status === 'Diproses').length;
+
+  return (
+    <aside className="w-64 bg-white text-slate-700 flex flex-col h-screen border-r border-slate-200/90 shrink-0 select-none shadow-[2px_0_12px_rgba(0,0,0,0.02)]">
+      {/* Brand Header matching screenshot */}
+      <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-slate-950 text-white font-black text-sm flex items-center justify-center shadow-sm tracking-tighter">
+            A
+          </div>
+          <div>
+            <div className="text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-1.5">
+              <span>ACRU</span>
+              <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-lime-100 text-lime-800 border border-lime-200/80">
+                HPP
+              </span>
+            </div>
+            <div className="text-[10px] text-slate-400 font-medium">Enterprise Costing</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Navigation Scrollable Area */}
+      <nav className="flex-1 overflow-y-auto p-3 space-y-3 text-xs font-medium">
+        {/* ================= UTAMA ================= */}
+        <div>
+          <button
+            onClick={() => toggleSection('sec1')}
+            className="w-full flex items-center justify-between px-2 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider hover:text-slate-700 transition-colors"
+          >
+            <span>UTAMA</span>
+            {expandedSections.sec1 ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+          {expandedSections.sec1 && (
+            <div className="mt-1 space-y-0.5">
+              <button
+                onClick={() => handleMenuClick('1.1')}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 transition-all ${
+                  currentMenu === '1.1'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4 shrink-0 text-slate-700" />
+                <span className="truncate">Dashboard</span>
+              </button>
+              <button
+                onClick={() => handleMenuClick('1.2')}
+                className={`w-full flex items-center justify-between px-3 py-2 transition-all ${
+                  currentMenu === '1.2'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 truncate">
+                  <Calculator className="w-4 h-4 shrink-0 text-lime-600" />
+                  <span className="truncate">Kalkulator HPP</span>
+                </div>
+                <span className="text-[9px] bg-lime-100 text-lime-800 px-1.5 py-0.5 rounded font-bold">
+                  Live
+                </span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ================= MASTER DATA ================= */}
+        <div>
+          <button
+            onClick={() => toggleSection('sec2')}
+            className="w-full flex items-center justify-between px-2 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider hover:text-slate-700 transition-colors"
+          >
+            <span>MASTER DATA</span>
+            {expandedSections.sec2 ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+          {expandedSections.sec2 && (
+            <div className="mt-1 space-y-0.5">
+              <button
+                onClick={() => handleMenuClick('2.1')}
+                className={`w-full flex items-center justify-between px-3 py-2 transition-all ${
+                  currentMenu === '2.1'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 truncate">
+                  <Package className="w-4 h-4 shrink-0 text-slate-600" />
+                  <span className="truncate">Produk</span>
+                </div>
+                <span className="text-[10px] bg-slate-900 text-white font-mono px-2 py-0.2 rounded-full font-bold">
+                  {products.length}
+                </span>
+              </button>
+              <button
+                onClick={() => handleMenuClick('2.2')}
+                className={`w-full flex items-center justify-between px-3 py-2 transition-all ${
+                  currentMenu === '2.2'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 truncate">
+                  <Database className="w-4 h-4 shrink-0 text-slate-600" />
+                  <span className="truncate">Bahan Baku</span>
+                </div>
+                <span className="text-[10px] text-slate-400 font-mono">{rawMaterials.length}</span>
+              </button>
+              <button
+                onClick={() => handleMenuClick('2.3')}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 transition-all ${
+                  currentMenu === '2.3'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <Factory className="w-4 h-4 shrink-0 text-slate-600" />
+                <span className="truncate">Supplier</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ================= PRODUKSI & HPP ================= */}
+        <div>
+          <button
+            onClick={() => toggleSection('sec3')}
+            className="w-full flex items-center justify-between px-2 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider hover:text-slate-700 transition-colors"
+          >
+            <span>PRODUKSI & HPP</span>
+            {expandedSections.sec3 ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+          {expandedSections.sec3 && (
+            <div className="mt-1 space-y-0.5">
+              <button
+                onClick={() => handleMenuClick('3.1')}
+                className={`w-full flex items-center justify-between px-3 py-2 transition-all ${
+                  currentMenu === '3.1'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 truncate">
+                  <Layers className="w-4 h-4 shrink-0 text-slate-600" />
+                  <span className="truncate">BOM / Resep</span>
+                </div>
+                <span className="text-[10px] text-slate-400 font-mono">{boms.length}</span>
+              </button>
+              <button
+                onClick={() => handleMenuClick('3.2')}
+                className={`w-full flex items-center justify-between px-3 py-2 transition-all ${
+                  currentMenu === '3.2'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 truncate">
+                  <Factory className="w-4 h-4 shrink-0 text-slate-600" />
+                  <span className="truncate">Produksi</span>
+                </div>
+                {inProgressBatches > 0 && (
+                  <span className="text-[10px] bg-amber-100 text-amber-800 font-semibold px-2 py-0.2 rounded-full">
+                    {inProgressBatches} aktif
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => handleMenuClick('3.3')}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 transition-all ${
+                  currentMenu === '3.3'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <Calculator className="w-4 h-4 shrink-0 text-slate-600" />
+                <span className="truncate">Perhitungan HPP</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ================= HARGA & PROFITABILITAS ================= */}
+        <div>
+          <button
+            onClick={() => toggleSection('sec4')}
+            className="w-full flex items-center justify-between px-2 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider hover:text-slate-700 transition-colors"
+          >
+            <span>HARGA & PROFITABILITAS</span>
+            {expandedSections.sec4 ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+          {expandedSections.sec4 && (
+            <div className="mt-1 space-y-0.5">
+              <button
+                onClick={() => handleMenuClick('4.1')}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 transition-all ${
+                  currentMenu === '4.1'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <Percent className="w-4 h-4 shrink-0 text-slate-600" />
+                <span className="truncate">Harga & Margin</span>
+              </button>
+              <button
+                onClick={() => handleMenuClick('4.2')}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 transition-all ${
+                  currentMenu === '4.2'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <TrendingUp className="w-4 h-4 shrink-0 text-slate-600" />
+                <span className="truncate">Analisis Profitabilitas</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ================= INVENTORY & PEMBELIAN ================= */}
+        <div>
+          <button
+            onClick={() => toggleSection('sec5')}
+            className="w-full flex items-center justify-between px-2 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider hover:text-slate-700 transition-colors"
+          >
+            <span>INVENTORY & PEMBELIAN</span>
+            {expandedSections.sec5 ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+          {expandedSections.sec5 && (
+            <div className="mt-1 space-y-0.5">
+              <button
+                onClick={() => handleMenuClick('5.1')}
+                className={`w-full flex items-center justify-between px-3 py-2 transition-all ${
+                  currentMenu === '5.1'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 truncate">
+                  <Warehouse className="w-4 h-4 shrink-0 text-slate-600" />
+                  <span className="truncate">Inventory</span>
+                </div>
+                {lowStockCount > 0 && (
+                  <span className="text-[10px] bg-rose-100 text-rose-700 font-semibold px-2 py-0.2 rounded-full">
+                    {lowStockCount} alert
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => handleMenuClick('5.2')}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 transition-all ${
+                  currentMenu === '5.2'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <ShoppingCart className="w-4 h-4 shrink-0 text-slate-600" />
+                <span className="truncate">Pembelian</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ================= ANALISIS & SIMULASI ================= */}
+        <div>
+          <button
+            onClick={() => toggleSection('sec6')}
+            className="w-full flex items-center justify-between px-2 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider hover:text-slate-700 transition-colors"
+          >
+            <span>ANALISIS & SIMULASI</span>
+            {expandedSections.sec6 ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+          {expandedSections.sec6 && (
+            <div className="mt-1 space-y-0.5">
+              <button
+                onClick={() => handleMenuClick('6.1')}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 transition-all ${
+                  currentMenu === '6.1'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <PieChart className="w-4 h-4 shrink-0 text-slate-600" />
+                <span className="truncate">Analisis HPP</span>
+              </button>
+              <button
+                onClick={() => handleMenuClick('6.2')}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 transition-all ${
+                  currentMenu === '6.2'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <SlidersHorizontal className="w-4 h-4 shrink-0 text-slate-600" />
+                <span className="truncate">Simulasi</span>
+              </button>
+              <button
+                onClick={() => handleMenuClick('6.3')}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 transition-all ${
+                  currentMenu === '6.3'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <Scale className="w-4 h-4 shrink-0 text-slate-600" />
+                <span className="truncate">BEP & Sensitivitas</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ================= LAPORAN ================= */}
+        <div>
+          <button
+            onClick={() => toggleSection('sec7')}
+            className="w-full flex items-center justify-between px-2 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider hover:text-slate-700 transition-colors"
+          >
+            <span>LAPORAN</span>
+            {expandedSections.sec7 ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+          {expandedSections.sec7 && (
+            <div className="mt-1 space-y-0.5">
+              <button
+                onClick={() => handleMenuClick('7.1')}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 transition-all ${
+                  currentMenu === '7.1'
+                    ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold rounded-r-xl'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-xl'
+                }`}
+              >
+                <FileBarChart className="w-4 h-4 shrink-0 text-slate-600" />
+                <span className="truncate">Laporan Terpadu</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ================= SISTEM ================= */}
+        <div>
+          <button
+            onClick={() => toggleSection('sec8')}
+            className="w-full flex items-center justify-between px-2 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider hover:text-slate-700 transition-colors"
+          >
+            <span>SISTEM</span>
+            {expandedSections.sec8 ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+          {expandedSections.sec8 && (
+            <div className="mt-1 space-y-0.5">
+              <button
+                onClick={() => handleMenuClick('8.1')}
+                className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg transition-all ${
+                  currentMenu === '8.1' ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <User className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Profil Pengguna</span>
+              </button>
+
+              <button
+                onClick={() => handleMenuClick('8.2')}
+                className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg transition-all ${
+                  currentMenu === '8.2' ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Manajemen Pengguna</span>
+              </button>
+
+              <button
+                onClick={() => handleMenuClick('8.3')}
+                className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg transition-all ${
+                  currentMenu === '8.3' ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <Shield className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Role & Hak Akses</span>
+              </button>
+
+              {/* Pengaturan Nested Accordion */}
+              <div>
+                <button
+                  onClick={() => toggleSection('sec84')}
+                  className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg hover:bg-slate-50 text-slate-600 hover:text-slate-900 transition-colors"
+                >
+                  <div className="flex items-center gap-2.5 truncate">
+                    <Settings className="w-3.5 h-3.5 shrink-0 text-slate-500" />
+                    <span className="truncate font-semibold">Pengaturan</span>
+                  </div>
+                  {expandedSections.sec84 ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                </button>
+
+                {expandedSections.sec84 && (
+                  <div className="pl-5 pr-1 py-1 space-y-0.5 border-l border-slate-200 ml-4 mt-0.5">
+                    <button
+                      onClick={() => handleMenuClick('8.4.1')}
+                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
+                        currentMenu === '8.4.1' ? 'bg-slate-100 text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Tag className="w-3 h-3 shrink-0" />
+                      <span className="truncate">Kategori Produk</span>
+                    </button>
+                    <button
+                      onClick={() => handleMenuClick('8.4.2')}
+                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
+                        currentMenu === '8.4.2' ? 'bg-slate-100 text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Tag className="w-3 h-3 shrink-0" />
+                      <span className="truncate">Kategori Bahan Baku</span>
+                    </button>
+                    <button
+                      onClick={() => handleMenuClick('8.4.3')}
+                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
+                        currentMenu === '8.4.3' ? 'bg-slate-100 text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Scale className="w-3 h-3 shrink-0" />
+                      <span className="truncate">Satuan Ukuran</span>
+                    </button>
+                    <button
+                      onClick={() => handleMenuClick('8.4.4')}
+                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
+                        currentMenu === '8.4.4' ? 'bg-slate-100 text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Calculator className="w-3 h-3 shrink-0" />
+                      <span className="truncate">Pengaturan HPP</span>
+                    </button>
+                    <button
+                      onClick={() => handleMenuClick('8.4.5')}
+                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
+                        currentMenu === '8.4.5' ? 'bg-slate-100 text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <DollarSign className="w-3 h-3 shrink-0" />
+                      <span className="truncate">Pengaturan Biaya</span>
+                    </button>
+                    <button
+                      onClick={() => handleMenuClick('8.4.6')}
+                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
+                        currentMenu === '8.4.6' ? 'bg-slate-100 text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Building className="w-3 h-3 shrink-0" />
+                      <span className="truncate">Pengaturan Perusahaan</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={() => handleMenuClick('8.5')}
+                className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg transition-all ${
+                  currentMenu === '8.5' ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Import Data</span>
+              </button>
+
+              <button
+                onClick={() => handleMenuClick('8.6')}
+                className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg transition-all ${
+                  currentMenu === '8.6' ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <DownloadCloud className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Export Data</span>
+              </button>
+
+              <button
+                onClick={() => handleMenuClick('8.7')}
+                className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg transition-all ${
+                  currentMenu === '8.7' ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Backup & Restore</span>
+              </button>
+
+              <button
+                onClick={() => handleMenuClick('8.8')}
+                className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg transition-all ${
+                  currentMenu === '8.8' ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <History className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Log Aktivitas</span>
+              </button>
+
+              <button
+                onClick={() => handleMenuClick('8.9')}
+                className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg transition-all ${
+                  currentMenu === '8.9' ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Panduan</span>
+              </button>
+
+              <button
+                onClick={() => handleMenuClick('8.10')}
+                className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg transition-all ${
+                  currentMenu === '8.10' ? 'bg-rose-50 text-rose-700 font-bold' : 'text-rose-600 hover:bg-rose-50'
+                }`}
+              >
+                <LogOut className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Logout</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </nav>
+
+      {/* Upgrade to Pro Card matching screenshot */}
+      <div className="p-3 border-t border-slate-100 bg-white">
+        <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-3.5 space-y-2.5 relative">
+          <div className="flex items-center justify-between">
+            <div className="w-7 h-7 rounded-full bg-slate-950 text-white flex items-center justify-center shadow-sm">
+              <Zap className="w-3.5 h-3.5 fill-white text-white" />
+            </div>
+            <span className="text-[10px] font-bold text-slate-400 font-mono">SaaS</span>
+          </div>
+          <div>
+            <div className="font-bold text-slate-900 text-xs">Upgrade to Pro!</div>
+            <div className="text-[11px] text-slate-500 mt-0.5 leading-snug">
+              Full financial insights with analytics and graphs.
+            </div>
+          </div>
+          <button
+            onClick={() => handleMenuClick('8.4.6')}
+            className="w-full py-2 bg-slate-950 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-xs transition-all text-center block"
+          >
+            Upgrade now
+          </button>
+        </div>
+
+        <div className="mt-2.5 px-2 flex items-center justify-between text-xs text-slate-400">
+          <span className="flex items-center gap-1.5 font-medium text-[11px] text-slate-500 hover:text-slate-800 cursor-pointer">
+            &laquo; Collapse sidebar
+          </span>
+          <span className="text-[10px] font-mono text-slate-500">{products.length}/50 SKU</span>
+        </div>
+      </div>
+    </aside>
+  );
+};

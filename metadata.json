@@ -1,0 +1,6 @@
+{
+  "name": "Kalkulator HPP SaaS",
+  "description": "Aplikasi SaaS Manajemen HPP (Harga Pokok Produksi), BOM Resep, Kalkulasi Margin & Profitabilitas, Inventory, dan BEP.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
