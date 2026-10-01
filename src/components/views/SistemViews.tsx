@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { MenuId, CostingMethod, Category, UnitOfMeasure, UserProfile } from '../../types';
 import { formatRupiah, formatNumber } from '../../utils/calculator';
+import { api } from '../../services/api';
 import {
   User,
   Users,
@@ -33,6 +34,12 @@ import {
   Camera,
   Upload,
   Image as ImageIcon,
+  Mail,
+  KeyRound,
+  Clock,
+  Zap,
+  AlertTriangle,
+  Award,
 } from 'lucide-react';
 import { DataPipelineCard } from '../common/DataPipelineCard';
 import { DataPipelineModal } from '../common/DataPipelineModal';
@@ -67,6 +74,13 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
     showToast,
     setCurrentMenu,
     logout,
+    activeSubscription,
+    subscriptionUsage,
+    currentTenant,
+    products,
+    rawMaterials,
+    boms,
+    refreshSubscription,
   } = useApp();
 
   // 8.1 Profile State
@@ -170,6 +184,15 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
 
   // 8.5 & 8.7 File import
   const [importJsonText, setImportJsonText] = useState('');
+
+  // User Invitation & Password Reset State (Requirements 15 & 16)
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<UserProfile['role']>('Cost Accountant');
+  const [invitationTokens, setInvitationTokens] = useState<any[]>([]);
+  const [isResetPwdModalOpen, setIsResetPwdModalOpen] = useState(false);
+  const [resetPwdUser, setResetPwdUser] = useState<UserProfile | null>(null);
+  const [newPasswordInput, setNewPasswordInput] = useState('Password123!');
 
   // -------------------------------------------------------------
   // PROFIL PENGGUNA
@@ -302,13 +325,26 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
             </p>
           </div>
 
-          <button
-            onClick={handleOpenAddUser}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Tambah Pengguna Baru</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setInviteEmail('');
+                setInviteRole('Cost Accountant');
+                setIsInviteModalOpen(true);
+              }}
+              className="flex items-center gap-2 px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer"
+            >
+              <Mail className="w-4 h-4" />
+              <span>Undang Anggota Tim</span>
+            </button>
+            <button
+              onClick={handleOpenAddUser}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Tambah Pengguna Baru</span>
+            </button>
+          </div>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
@@ -320,7 +356,7 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
                 <th className="py-3 px-4">Telepon</th>
                 <th className="py-3 px-4">Login Terakhir</th>
                 <th className="py-3 px-4 text-center">Status</th>
-                <th className="py-3 px-4 text-center w-28">Aksi</th>
+                <th className="py-3 px-4 text-center w-36">Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -360,8 +396,19 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
                   <td className="py-3.5 px-4 text-center">
                     <div className="flex items-center justify-center gap-1">
                       <button
+                        onClick={() => {
+                          setResetPwdUser(u);
+                          setNewPasswordInput('Password123!');
+                          setIsResetPwdModalOpen(true);
+                        }}
+                        className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                        title="Reset Kata Sandi Pengguna"
+                      >
+                        <KeyRound className="w-4 h-4" />
+                      </button>
+                      <button
                         onClick={() => handleOpenEditUser(u)}
-                        className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                        className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
                         title="Edit Data & Foto Pengguna"
                       >
                         <Edit2 className="w-4 h-4" />
@@ -372,7 +419,7 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
                             deleteUser(u.id);
                           }
                         }}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                         title="Hapus Pengguna"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -600,9 +647,181 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition-colors"
+                    className="px-4 py-2 font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition-colors cursor-pointer"
                   >
                     {editingUser ? 'Simpan Perubahan' : 'Simpan Pengguna'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Undang Pengguna (Requirements 15 & 16) */}
+        {isInviteModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95">
+              <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 rounded-xl bg-indigo-100 text-indigo-700">
+                    <Mail className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-sm">Undang Pengguna Tim</h3>
+                    <p className="text-[11px] text-slate-500">Terbitkan token undangan resmi terotentikasi</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsInviteModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!inviteEmail.trim()) {
+                    showToast('Email Diperlukan', 'Harap masukkan alamat email calon pengguna.', 'warning');
+                    return;
+                  }
+                  try {
+                    const res = await api.inviteUser(inviteEmail.trim(), inviteRole);
+                    showToast('Undangan Berhasil Dibuat', `Token undangan telah diterbitkan untuk ${inviteEmail}. Token: ${res.invitation.token}`, 'success');
+                    setInvitationTokens((prev) => [res.invitation, ...prev]);
+                    setIsInviteModalOpen(false);
+                    setInviteEmail('');
+                  } catch (err: any) {
+                    showToast('Gagal Menerbitkan Undangan', err.message || 'Kendala kuota paket atau izin peran.', 'error');
+                  }
+                }}
+                className="p-5 space-y-4 text-xs"
+              >
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Email Calon Pengguna</label>
+                  <input
+                    type="email"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    placeholder="nama.rekan@perusahaan.co.id"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Peran / Hak Akses</label>
+                  <select
+                    value={inviteRole}
+                    onChange={(e) => setInviteRole(e.target.value as any)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  >
+                    <option value="Cost Accountant">Cost Accountant</option>
+                    <option value="Inventory Staff">Inventory Staff</option>
+                    <option value="Staff">Staff Produksi</option>
+                    <option value="Kasir">Kasir</option>
+                    <option value="Manager / Owner">Manager / Owner</option>
+                    <option value="Administrator">Administrator Bisnis</option>
+                    <option value="Viewer">Viewer (Hanya Lihat)</option>
+                  </select>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-500 text-[11px] space-y-1">
+                  <div className="font-semibold text-slate-700">Ketentuan Kuota & Keamanan:</div>
+                  <p>• Undangan divalidasi langsung oleh backend sesuai batas kuota paket ({activeSubscription?.limits?.maxUsers || 5} user).</p>
+                  <p>• Peran SUPER_ADMIN tidak dapat diberikan oleh pengguna bisnis.</p>
+                </div>
+
+                <div className="pt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsInviteModalOpen(false)}
+                    className="px-4 py-2 font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-colors cursor-pointer"
+                  >
+                    Terbitkan Undangan
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Reset Kata Sandi Pengguna (Requirement 15) */}
+        {isResetPwdModalOpen && resetPwdUser && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95">
+              <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 rounded-xl bg-amber-100 text-amber-700">
+                    <KeyRound className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-sm">Reset Kata Sandi Pengguna</h3>
+                    <p className="text-[11px] text-slate-500">{resetPwdUser.name} ({resetPwdUser.email})</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsResetPwdModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!newPasswordInput || newPasswordInput.length < 6) {
+                    showToast('Kata Sandi Lemah', 'Minimal panjang kata sandi adalah 6 karakter.', 'warning');
+                    return;
+                  }
+                  try {
+                    await updateUser(resetPwdUser.id, {
+                      newPassword: newPasswordInput,
+                    } as any);
+                    showToast('Kata Sandi Berhasil Direset', `Kata sandi baru untuk ${resetPwdUser.name} telah disimpan dengan hash terenkripsi.`, 'success');
+                    setIsResetPwdModalOpen(false);
+                  } catch (err: any) {
+                    showToast('Gagal Reset Sandi', err.message || 'Terjadi kesalahan.', 'error');
+                  }
+                }}
+                className="p-5 space-y-4 text-xs"
+              >
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Kata Sandi Baru</label>
+                  <input
+                    type="text"
+                    value={newPasswordInput}
+                    onChange={(e) => setNewPasswordInput(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                    placeholder="Minimal 6 karakter"
+                    required
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Kata sandi langsung di-hash menggunakan algoritma Salted SHA-256 di backend sebelum disimpan.
+                  </p>
+                </div>
+
+                <div className="pt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsResetPwdModalOpen(false)}
+                    className="px-4 py-2 font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl shadow-xs transition-colors cursor-pointer"
+                  >
+                    Simpan Kata Sandi Baru
                   </button>
                 </div>
               </form>
@@ -1019,7 +1238,153 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
 
           {subModule === '8.4.6' && (
             <>
-              <div className="grid grid-cols-2 gap-4">
+              {/* SaaS Subscription & Entitlement Details Card (Requirements 21 & 22) */}
+              {(() => {
+                const planCode = activeSubscription?.planCode || currentTenant?.plan || 'STARTER';
+                const planName = activeSubscription?.planName || currentTenant?.plan || 'Starter UMKM';
+                const statusStr = (activeSubscription?.status || 'ACTIVE').toUpperCase();
+                const maxUsers = activeSubscription?.limits?.maxUsers || 5;
+                const userCount = availableUsers.length;
+                const maxProducts = activeSubscription?.limits?.maxProducts || 100;
+                const prodCount = products.length;
+                const maxRaw = activeSubscription?.limits?.maxRawMaterials || 50;
+                const rawCount = rawMaterials.length;
+                const maxBoms = activeSubscription?.limits?.maxBoms || 50;
+                const bomCount = boms.length;
+
+                const userRatio = userCount / maxUsers;
+                const prodRatio = prodCount / maxProducts;
+                const isUserWarning = userRatio >= 0.8;
+                const isProdWarning = prodRatio >= 0.8;
+
+                const endVal = activeSubscription?.endDate || activeSubscription?.trialEnd;
+                const formattedEnd = endVal
+                  ? new Date(endVal).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
+                  : '31 Desember 2026';
+
+                return (
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4 shadow-2xs">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200/80 pb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+                          <Zap className="w-5 h-5 text-amber-400 fill-amber-400" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-base text-slate-900">Paket: {planCode}</span>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              statusStr === 'ACTIVE'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : statusStr === 'TRIAL'
+                                ? 'bg-amber-100 text-amber-800'
+                                : 'bg-rose-100 text-rose-800'
+                            }`}>
+                              {statusStr === 'ACTIVE' ? 'Aktif' : statusStr === 'TRIAL' ? 'Masa Trial' : 'Expired'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-0.5">{planName} • Siklus: {activeSubscription?.billingCycle || 'Bulanan'}</p>
+                        </div>
+                      </div>
+
+                      <div className="text-left sm:text-right text-xs">
+                        <span className="text-slate-400 block text-[11px]">Masa Aktif Berakhir:</span>
+                        <span className="font-bold text-slate-800 text-sm">{formattedEnd}</span>
+                      </div>
+                    </div>
+
+                    {/* Quota Progress Warnings (Requirement 22) */}
+                    {(isUserWarning || isProdWarning) && (
+                      <div className="bg-amber-100/90 border border-amber-200 text-amber-900 p-3 rounded-xl flex items-start gap-2.5 text-xs">
+                        <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-bold">Peringatan Kuota Paket:</span>
+                          <span className="ml-1">
+                            {isUserWarning
+                              ? `Penggunaan user Anda sudah mencapai ${Math.round(userRatio * 100)}% dari batas paket (${userCount}/${maxUsers} User).`
+                              : `Penggunaan produk Anda sudah mencapai ${Math.round(prodRatio * 100)}% dari batas paket (${prodCount}/${maxProducts} SKU).`}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Resource Limit Metrics */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div className="bg-white p-3 rounded-xl border border-slate-200/90 shadow-2xs">
+                        <div className="text-slate-400 text-[11px]">Pengguna (User)</div>
+                        <div className="text-base font-bold text-slate-900 mt-1">
+                          {userCount} <span className="text-xs text-slate-400 font-normal">/ {maxUsers}</span>
+                        </div>
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full mt-2 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${userRatio >= 0.8 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                            style={{ width: `${Math.min(100, userRatio * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="bg-white p-3 rounded-xl border border-slate-200/90 shadow-2xs">
+                        <div className="text-slate-400 text-[11px]">Produk (SKU)</div>
+                        <div className="text-base font-bold text-slate-900 mt-1">
+                          {prodCount} <span className="text-xs text-slate-400 font-normal">/ {maxProducts}</span>
+                        </div>
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full mt-2 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${prodRatio >= 0.8 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                            style={{ width: `${Math.min(100, prodRatio * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="bg-white p-3 rounded-xl border border-slate-200/90 shadow-2xs">
+                        <div className="text-slate-400 text-[11px]">Bahan Baku</div>
+                        <div className="text-base font-bold text-slate-900 mt-1">
+                          {rawCount} <span className="text-xs text-slate-400 font-normal">/ {maxRaw}</span>
+                        </div>
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full mt-2 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-indigo-500"
+                            style={{ width: `${Math.min(100, (rawCount / maxRaw) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="bg-white p-3 rounded-xl border border-slate-200/90 shadow-2xs">
+                        <div className="text-slate-400 text-[11px]">Formula BOM</div>
+                        <div className="text-base font-bold text-slate-900 mt-1">
+                          {bomCount} <span className="text-xs text-slate-400 font-normal">/ {maxBoms}</span>
+                        </div>
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full mt-2 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-indigo-500"
+                            style={{ width: `${Math.min(100, (bomCount / maxBoms) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Feature Entitlements Badges */}
+                    {activeSubscription?.features && (
+                      <div className="pt-2">
+                        <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">
+                          Hak Akses Fitur Terdaftar (Feature Entitlement):
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(activeSubscription.features as string[]).map((f) => (
+                            <span
+                              key={f}
+                              className="text-[10px] font-semibold bg-white border border-slate-200 px-2 py-0.5 rounded-md text-slate-700 font-mono shadow-2xs"
+                            >
+                              ✓ {f}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              <div className="grid grid-cols-2 gap-4 pt-2">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Nama Entitas PT / CV</label>
                   <input

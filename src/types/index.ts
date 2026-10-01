@@ -33,9 +33,118 @@ export type MenuId =
 
 export type CostingMethod = 'FULL_COSTING' | 'VARIABLE_COSTING';
 
+export type FeatureKey =
+  | 'HPP'
+  | 'BOM'
+  | 'PRODUKSI'
+  | 'INVENTORY'
+  | 'SUPPLIER'
+  | 'PELANGGAN'
+  | 'PURCHASE'
+  | 'PROFITABILITY'
+  | 'REPORT'
+  | 'EXPORT'
+  | 'MULTI_USER'
+  | 'ADVANCED_REPORT'
+  | 'API'
+  | 'AUDIT_LOG';
+
+export type SaaSSubscriptionStatus =
+  | 'TRIAL'
+  | 'ACTIVE'
+  | 'PAST_DUE'
+  | 'EXPIRED'
+  | 'CANCELLED'
+  | 'SUSPENDED';
+
+export type BusinessAccessMode = 'ACTIVE' | 'READ_ONLY' | 'SUSPENDED';
+
+export interface PlanLimits {
+  maxUsers: number;
+  maxProducts: number;
+  maxRawMaterials: number;
+  maxBoms: number;
+  maxBatchesMonthly: number;
+  maxStorageMb?: number;
+}
+
+export interface SaaSPlan {
+  id: string;
+  code: 'FREE' | 'STARTER' | 'PRO' | 'BUSINESS' | string;
+  name: string;
+  description: string;
+  priceMonthly: number;
+  priceYearly: number;
+  billingPeriod: 'MONTHLY' | 'YEARLY';
+  trialDays: number;
+  isActive: boolean;
+  features: FeatureKey[];
+  limits: PlanLimits;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface SaaSSubscription {
+  id: string;
+  businessId: string;
+  businessName?: string;
+  planId: string;
+  planCode: string;
+  planName: string;
+  status: SaaSSubscriptionStatus;
+  billingCycle: 'MONTHLY' | 'YEARLY';
+  startDate: string;
+  endDate: string;
+  trialStart?: string;
+  trialEnd?: string;
+  isReadOnly: boolean;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserInvitation {
+  id: string;
+  businessId: string;
+  email: string;
+  role: UserProfile['role'];
+  invitedBy: string;
+  token: string;
+  status: 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'REVOKED';
+  expiresAt: string;
+  createdAt: string;
+}
+
+export interface AdminAuditLog {
+  id: string;
+  actorUserId: string;
+  actorName: string;
+  actorRole: string;
+  businessId?: string;
+  businessName?: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  timestamp: string;
+  metadata?: Record<string, any>;
+}
+
+export interface PlatformOverviewStats {
+  totalBusinesses: number;
+  activeBusinesses: number;
+  trialBusinesses: number;
+  suspendedBusinesses: number;
+  expiredBusinesses: number;
+  totalUsers: number;
+  newBusinessesThisMonth: number;
+  trialsEndingSoon: number;
+  activeSubscriptions: number;
+  subscriptionsEndingSoon: number;
+}
+
 export interface BusinessSubscription {
-  plan: 'Starter' | 'Business Pro' | 'Enterprise';
-  status: 'active' | 'trial' | 'expired' | 'suspended';
+  plan: 'FREE' | 'Starter' | 'STARTER' | 'Business Pro' | 'PRO' | 'Enterprise' | 'BUSINESS' | string;
+  status: 'active' | 'trial' | 'expired' | 'suspended' | string;
   trialEndsAt?: string;
   expiresAt?: string;
   maxUsers: number;
@@ -48,18 +157,28 @@ export interface Business {
   name: string;
   code?: string;
   industry: string;
-  plan: 'Starter' | 'Business Pro' | 'Enterprise';
+  plan: 'FREE' | 'Starter' | 'STARTER' | 'Business Pro' | 'PRO' | 'Enterprise' | 'BUSINESS' | string;
+  planId?: string;
+  ownerName?: string;
+  ownerEmail?: string;
   logoText: string;
   skuCount: number;
   maxSku: number;
-  status: 'active' | 'trial' | 'suspended';
+  status: 'ACTIVE' | 'TRIAL' | 'SUSPENDED' | 'EXPIRED' | 'CANCELLED' | 'active' | 'trial' | 'suspended' | 'expired';
+  accessMode?: BusinessAccessMode;
   email?: string;
   phone?: string;
   address?: string;
   taxId?: string; // NPWP
   currency: string;
   createdAt: string;
-  subscription: BusinessSubscription;
+  trialEndsAt?: string;
+  subscriptionEndsAt?: string;
+  userCount?: number;
+  productCount?: number;
+  subscription?: BusinessSubscription;
+  activeSubscription?: SaaSSubscription;
+  onboardingStatus?: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
 }
 
 // Aliasing Tenant to Business for full backward compatibility
@@ -73,6 +192,7 @@ export interface AuthSession {
   userRole: UserProfile['role'];
   businessId: string;
   businessName: string;
+  isSuperAdmin?: boolean;
   createdAt: string;
   expiresAt: string;
 }
@@ -84,7 +204,7 @@ export interface UserProfile {
   email: string;
   passwordHash?: string; // Salted SHA-256 hash (never plain text)
   salt?: string;
-  role: 'Administrator' | 'Manager / Owner' | 'Staff' | 'Kasir' | 'Cost Accountant' | 'Inventory Staff' | 'Viewer';
+  role: 'SUPER_ADMIN' | 'Administrator' | 'Manager / Owner' | 'Staff' | 'Kasir' | 'Cost Accountant' | 'Inventory Staff' | 'Viewer';
   avatar: string;
   tenantId: string; // Business ID
   businessId?: string; // Business ID

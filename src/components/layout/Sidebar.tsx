@@ -39,7 +39,20 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
-  const { currentMenu, setCurrentMenu, rawMaterials, products, boms, batches } = useApp();
+  const {
+    currentMenu,
+    setCurrentMenu,
+    rawMaterials,
+    products,
+    boms,
+    batches,
+    activeSubscription,
+    subscriptionUsage,
+    availableUsers,
+    currentTenant,
+    openUpgradeModal,
+    setIsOnboardingOpen,
+  } = useApp();
 
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     sec1: true,
@@ -576,34 +589,102 @@ export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
         </div>
       </nav>
 
-      {/* Upgrade to Pro Card matching screenshot */}
+      {/* Subscription Status & Quota Card */}
       <div className="p-3 border-t border-slate-100 bg-white">
-        <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-3.5 space-y-2.5 relative">
-          <div className="flex items-center justify-between">
-            <div className="w-7 h-7 rounded-full bg-slate-950 text-white flex items-center justify-center shadow-sm">
-              <Zap className="w-3.5 h-3.5 fill-white text-white" />
-            </div>
-            <span className="text-[10px] font-bold text-slate-400 font-mono">SaaS</span>
-          </div>
-          <div>
-            <div className="font-bold text-slate-900 text-xs">Upgrade to Pro!</div>
-            <div className="text-[11px] text-slate-500 mt-0.5 leading-snug">
-              Full financial insights with analytics and graphs.
-            </div>
-          </div>
-          <button
-            onClick={() => handleMenuClick('8.4.6')}
-            className="w-full py-2 bg-slate-950 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-xs transition-all text-center block"
-          >
-            Upgrade now
-          </button>
-        </div>
+        {(() => {
+          const planCode = activeSubscription?.planCode || currentTenant?.plan || 'STARTER';
+          const planName = activeSubscription?.planName || 'Starter UMKM';
+          const subStatus = (activeSubscription?.status || 'ACTIVE').toUpperCase();
+          const maxUsers = activeSubscription?.limits?.maxUsers || 5;
+          const currentUsers = availableUsers.length;
+          const maxProducts = activeSubscription?.limits?.maxProducts || 100;
+          const currentProducts = products.length;
+          const userRatio = currentUsers / maxUsers;
+          const isWarning = userRatio >= 0.8 || currentProducts / maxProducts >= 0.8;
 
-        <div className="mt-2.5 px-2 flex items-center justify-between text-xs text-slate-400">
-          <span className="flex items-center gap-1.5 font-medium text-[11px] text-slate-500 hover:text-slate-800 cursor-pointer">
-            &laquo; Collapse sidebar
+          const dateEndStr = activeSubscription?.endDate || activeSubscription?.trialEnd;
+          const formattedEnd = dateEndStr ? new Date(dateEndStr).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : '31 Des 2026';
+
+          return (
+            <div className={`border rounded-2xl p-3 space-y-2.5 relative transition-all ${
+              subStatus === 'EXPIRED'
+                ? 'bg-rose-50/70 border-rose-200'
+                : subStatus === 'TRIAL'
+                ? 'bg-amber-50/70 border-amber-200'
+                : 'bg-slate-50 border-slate-200/90'
+            }`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-6 h-6 rounded-lg bg-slate-950 text-white flex items-center justify-center shadow-xs">
+                    <Zap className="w-3 h-3 fill-white text-white" />
+                  </div>
+                  <span className="text-[11px] font-bold text-slate-800">Paket: {planCode}</span>
+                </div>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                  subStatus === 'ACTIVE'
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : subStatus === 'TRIAL'
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-rose-100 text-rose-800'
+                }`}>
+                  {subStatus === 'ACTIVE' ? 'Aktif' : subStatus === 'TRIAL' ? 'Masa Trial' : 'Expired'}
+                </span>
+              </div>
+
+              <div className="space-y-1 text-[11px]">
+                <div className="flex justify-between text-slate-500">
+                  <span>Berakhir:</span>
+                  <span className="font-semibold text-slate-800">{formattedEnd}</span>
+                </div>
+                <div className="flex justify-between text-slate-500">
+                  <span>Penggunaan User:</span>
+                  <span className={`font-semibold ${userRatio >= 0.8 ? 'text-amber-600 font-bold' : 'text-slate-800'}`}>
+                    {currentUsers} / {maxUsers} User
+                  </span>
+                </div>
+              </div>
+
+              {/* Quota warning if approaching 80% */}
+              {isWarning && subStatus !== 'EXPIRED' && (
+                <div className="text-[10px] bg-amber-100/80 text-amber-800 p-1.5 rounded-lg font-medium border border-amber-200 leading-tight">
+                  ⚠️ Penggunaan Anda telah mencapai {Math.round(Math.max(userRatio, currentProducts / maxProducts) * 100)}% dari batas paket.
+                </div>
+              )}
+
+              <div className="flex flex-col gap-1.5">
+                <button
+                  onClick={() => openUpgradeModal('PRO')}
+                  className="w-full py-1.5 bg-slate-950 hover:bg-slate-800 text-white font-bold text-[11px] rounded-xl shadow-xs transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Zap className="w-3 h-3 text-amber-400 fill-amber-400" />
+                  <span>Tingkatkan ke PRO</span>
+                </button>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    onClick={() => handleMenuClick('8.4.6')}
+                    className="py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-[10px] rounded-lg transition-all text-center truncate cursor-pointer"
+                  >
+                    Detail Paket
+                  </button>
+                  <button
+                    onClick={() => setIsOnboardingOpen(true)}
+                    className="py-1 bg-slate-100 hover:bg-slate-200 text-indigo-700 font-semibold text-[10px] rounded-lg transition-all text-center truncate cursor-pointer"
+                  >
+                    Panduan Setup
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        <div className="mt-2 px-1 flex items-center justify-between text-xs text-slate-400">
+          <span className="text-[10px] text-slate-500 font-mono truncate max-w-[120px]">
+            {currentTenant.name}
           </span>
-          <span className="text-[10px] font-mono text-slate-500">{products.length}/50 SKU</span>
+          <span className="text-[10px] font-mono text-slate-500">
+            {products.length} / {activeSubscription?.limits?.maxProducts || 100} SKU
+          </span>
         </div>
       </div>
     </aside>

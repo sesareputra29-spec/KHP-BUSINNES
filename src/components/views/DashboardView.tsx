@@ -34,6 +34,7 @@ import {
   Scale,
 } from 'lucide-react';
 import { DataPipelineModal } from '../common/DataPipelineModal';
+import { api } from '../../services/api';
 
 export const DashboardView: React.FC = () => {
   const {
@@ -45,12 +46,31 @@ export const DashboardView: React.FC = () => {
     setCurrentMenu,
     currentTenant,
     categories,
+    setIsOnboardingOpen,
+    openUpgradeModal,
+    loadBusinessData,
+    showToast,
+    activeSubscription,
   } = useApp();
 
   // State
   const [timeFilter, setTimeFilter] = useState<'7d' | '30d' | '1y'>('7d');
   const [selectedDayIndex, setSelectedDayIndex] = useState<number>(3); // Rabu (indeks 3) default
   const [isPipelineModalOpen, setIsPipelineModalOpen] = useState(false);
+  const [isSeeding, setIsSeeding] = useState(false);
+
+  const handleQuickSeed = async () => {
+    setIsSeeding(true);
+    try {
+      await api.seedSampleData();
+      await loadBusinessData();
+      showToast('Data Contoh Siap', 'Data bahan baku, produk, dan resep BOM Croissant telah dimuat ke ruang kerja Anda.', 'success');
+    } catch (e: any) {
+      showToast('Gagal Memuat Data', e.message || 'Terjadi kesalahan.', 'error');
+    } finally {
+      setIsSeeding(false);
+    }
+  };
 
   // ==============================================================
   // KORELASI & AGREGASI DATA DARI LAPORAN KEUANGAN & PRODUKSI
@@ -202,6 +222,99 @@ export const DashboardView: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
+      {/* ============================================================== */}
+      {/* BANNER ONBOARDING & SETUP DATA AWAL (CUSTOMER JOURNEY)          */}
+      {/* ============================================================== */}
+      {(activeSubscription?.status === 'TRIAL' || products.length <= 1) && (
+        <div className="bg-white border-2 border-indigo-100 rounded-2xl md:rounded-3xl p-5 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-700 flex items-center justify-center font-bold shrink-0">
+                <Sparkles className="w-5 h-5 text-indigo-600" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-extrabold text-sm sm:text-base text-slate-900">
+                    Panduan Orientasi & Setup Awal Bisnis
+                  </h3>
+                  <span className="text-[10px] font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full uppercase">
+                    Trial 14 Hari
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Lengkapi master data produk, bahan baku, dan formula resep BOM untuk mengaktifkan kalkulasi HPP presisi.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setIsOnboardingOpen(true)}
+                className="px-4 py-2 bg-slate-950 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>Buka Wizard Setup</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              <button
+                onClick={handleQuickSeed}
+                disabled={isSeeding}
+                className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold text-xs rounded-xl transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                <span>{isSeeding ? 'Memuat Data...' : 'Muat Data Contoh Croissant'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Quick Setup Checklist */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-100 text-xs">
+            <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <div className="min-w-0">
+                <div className="font-bold text-slate-800 text-[11px] truncate">1. Profil Bisnis</div>
+                <div className="text-[10px] text-slate-500 truncate">{currentTenant.name}</div>
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center gap-2">
+              {products.length > 0 ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              ) : (
+                <div className="w-4 h-4 rounded-full border-2 border-slate-300 shrink-0" />
+              )}
+              <div className="min-w-0">
+                <div className="font-bold text-slate-800 text-[11px] truncate">2. Produk (SKU)</div>
+                <div className="text-[10px] text-slate-500 truncate">{products.length} SKU terdaftar</div>
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center gap-2">
+              {rawMaterials.length > 0 ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              ) : (
+                <div className="w-4 h-4 rounded-full border-2 border-slate-300 shrink-0" />
+              )}
+              <div className="min-w-0">
+                <div className="font-bold text-slate-800 text-[11px] truncate">3. Bahan Baku</div>
+                <div className="text-[10px] text-slate-500 truncate">{rawMaterials.length} bahan terdaftar</div>
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center gap-2">
+              {boms.length > 0 ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              ) : (
+                <div className="w-4 h-4 rounded-full border-2 border-slate-300 shrink-0" />
+              )}
+              <div className="min-w-0">
+                <div className="font-bold text-slate-800 text-[11px] truncate">4. Resep BOM</div>
+                <div className="text-[10px] text-slate-500 truncate">{boms.length} formula aktif</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ============================================================== */}
       {/* BANNER 1: HUBUNGAN TERINTEGRASI DASHBOARD DENGAN PUSAT LAPORAN */}
       {/* ============================================================== */}

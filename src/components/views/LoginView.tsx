@@ -15,9 +15,15 @@ import {
   Layers,
   Phone,
   Factory,
+  ArrowLeft,
+  Sparkle,
 } from 'lucide-react';
 
-export const LoginView: React.FC = () => {
+interface LoginViewProps {
+  onNavigate?: (route: string) => void;
+}
+
+export const LoginView: React.FC<LoginViewProps> = ({ onNavigate }) => {
   const { login, registerBusinessAndUser, availableTenants, availableUsers } = useApp();
 
   const [activeTab, setActiveTab] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
@@ -97,6 +103,32 @@ export const LoginView: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#eceef2] flex flex-col justify-center py-10 px-4 sm:px-6 lg:px-8 font-sans text-slate-800">
+      {onNavigate && (
+        <div className="sm:mx-auto sm:w-full sm:max-w-md mb-4 flex items-center justify-between text-xs font-semibold text-slate-600">
+          <button
+            onClick={() => onNavigate('/')}
+            className="flex items-center gap-1.5 hover:text-slate-900 transition-colors cursor-pointer"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Kembali ke Beranda</span>
+          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => onNavigate('/pricing')}
+              className="hover:text-slate-900 transition-colors cursor-pointer"
+            >
+              Paket & Harga
+            </button>
+            <button
+              onClick={() => onNavigate('/register')}
+              className="font-bold text-slate-950 hover:underline transition-colors cursor-pointer"
+            >
+              Daftar Trial 14 Hari &raquo;
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
         {/* Logo & App Brand */}
         <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-slate-900 text-white shadow-lg mb-4">
@@ -383,12 +415,12 @@ export const LoginView: React.FC = () => {
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-left">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-left">
               {/* Bisnis 1: PT Boga Rasa */}
               <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
                 <div className="text-[10px] font-bold text-slate-800 flex items-center gap-1">
                   <span>🥖</span>
-                  <span className="truncate">PT Boga Rasa Nusantara</span>
+                  <span className="truncate">PT Boga Rasa</span>
                 </div>
                 <div className="flex flex-col gap-1">
                   <button
@@ -414,7 +446,7 @@ export const LoginView: React.FC = () => {
               <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
                 <div className="text-[10px] font-bold text-slate-800 flex items-center gap-1">
                   <span>⚙️</span>
-                  <span className="truncate">CV Karya Logam Mandiri</span>
+                  <span className="truncate">CV Karya Logam</span>
                 </div>
                 <div className="flex flex-col gap-1">
                   <button
@@ -433,6 +465,27 @@ export const LoginView: React.FC = () => {
                     <span>Agus (Staff)</span>
                     <span className="text-[9px] text-slate-400 font-mono">Staff123!</span>
                   </button>
+                </div>
+              </div>
+
+              {/* Platform Super Admin */}
+              <div className="p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-1.5">
+                <div className="text-[10px] font-bold text-indigo-900 flex items-center gap-1">
+                  <span>🛡️</span>
+                  <span className="truncate">Platform SaaS</span>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <button
+                    type="button"
+                    onClick={() => handleQuickDemoSelect('superadmin@hppsaas.com', 'SuperAdmin123!')}
+                    className="text-[11px] text-left px-2 py-1 rounded bg-white hover:bg-indigo-100 hover:text-indigo-900 border border-indigo-200 font-bold transition-colors flex items-center justify-between"
+                  >
+                    <span>Super Admin (/admin)</span>
+                    <span className="text-[9px] text-indigo-500 font-mono">SuperAdmin123!</span>
+                  </button>
+                  <div className="text-[10px] text-indigo-700/80 px-1 py-0.5">
+                    Kendali multi-tenant, paket & trial
+                  </div>
                 </div>
               </div>
             </div>

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
@@ -29,16 +29,127 @@ import { BepSensitivitasView } from './components/views/BepSensitivitasView';
 import { LaporanView } from './components/views/LaporanView';
 import { SistemViews } from './components/views/SistemViews';
 import { LoginView } from './components/views/LoginView';
+import { SuperAdminDashboard } from './components/admin/SuperAdminDashboard';
+import { FeatureLockGuard } from './components/common/FeatureLockGuard';
+import { UpgradePlanModal } from './components/common/UpgradePlanModal';
+import { AlertTriangle, Lock } from 'lucide-react';
+
+// Public & Onboarding Views (Customer Journey)
+import { LandingPageView } from './components/public/LandingPageView';
+import { PricingPageView } from './components/public/PricingPageView';
+import { RegisterView } from './components/public/RegisterView';
+import { OnboardingWizardView } from './components/onboarding/OnboardingWizardView';
 
 const AppContent: React.FC = () => {
-  const { currentMenu, isAuthenticated } = useApp();
+  const {
+    currentMenu,
+    isAuthenticated,
+    currentUser,
+    isSuperAdminPortalOpen,
+    isReadOnly,
+    activeSubscription,
+    setCurrentMenu,
+    isOnboardingOpen,
+    setIsOnboardingOpen,
+    isUpgradeModalOpen,
+    setIsUpgradeModalOpen,
+    targetUpgradePlan,
+  } = useApp();
+
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Authentication gate: if not signed in, show commercial multi-tenant LoginView
+  // Client-side URL Router state matching browser location
+  const [currentPath, setCurrentPath] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return window.location.pathname || '/';
+    }
+    return '/';
+  });
+
+  const navigate = useCallback((path: string) => {
+    if (typeof window !== 'undefined') {
+      window.history.pushState({}, '', path);
+    }
+    setCurrentPath(path);
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentPath(window.location.pathname || '/');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // 1. PUBLIC ROUTES (When user is not authenticated)
   if (!isAuthenticated) {
+    if (currentPath === '/pricing') {
+      return (
+        <>
+          <PricingPageView onNavigate={navigate} />
+          <ToastContainer />
+        </>
+      );
+    }
+
+    if (currentPath === '/register') {
+      return (
+        <>
+          <RegisterView onNavigate={navigate} />
+          <ToastContainer />
+        </>
+      );
+    }
+
+    if (currentPath === '/login' || currentPath.startsWith('/admin')) {
+      return (
+        <>
+          <LoginView onNavigate={navigate} />
+          <ToastContainer />
+        </>
+      );
+    }
+
+    // Default public root: Landing Page
     return (
       <>
-        <LoginView />
+        <LandingPageView onNavigate={navigate} />
+        <ToastContainer />
+      </>
+    );
+  }
+
+  // 2. SUPER ADMIN PLATFORM ROUTE (/admin or role = SUPER_ADMIN)
+  const isAdminRoute = currentPath.startsWith('/admin');
+  if (currentUser?.role === 'SUPER_ADMIN' || isSuperAdminPortalOpen || isAdminRoute) {
+    return (
+      <>
+        <SuperAdminDashboard />
+        <ToastContainer />
+      </>
+    );
+  }
+
+  // 3. ONBOARDING WIZARD ROUTE (First-time user or manual trigger)
+  if (isOnboardingOpen) {
+    return (
+      <>
+        <OnboardingWizardView onComplete={() => setIsOnboardingOpen(false)} />
+        <ToastContainer />
+      </>
+    );
+  }
+
+  // 4. PUBLIC PRICING VIEW ACCESSIBLE FROM WITHIN THE APP
+  if (currentPath === '/pricing') {
+    return (
+      <>
+        <PricingPageView onNavigate={navigate} />
+        <UpgradePlanModal
+          isOpen={isUpgradeModalOpen}
+          onClose={() => setIsUpgradeModalOpen(false)}
+          recommendedPlanCode={targetUpgradePlan}
+        />
         <ToastContainer />
       </>
     );
@@ -73,7 +184,16 @@ const AppContent: React.FC = () => {
       case '4.1':
         return <HargaMarginView />;
       case '4.2':
-        return <AnalisisProfitabilitasView />;
+        return (
+          <FeatureLockGuard
+            feature="PROFITABILITY"
+            featureName="Analisis Profitabilitas Lanjutan"
+            minimumPlan="PRO"
+            description="Modul analisis margin kontribusi, profitabilitas per SKU produk, dan matriks Boston Consulting Group (BCG)."
+          >
+            <AnalisisProfitabilitasView />
+          </FeatureLockGuard>
+        );
 
       // 5. INVENTORY & PEMBELIAN
       case '5.1':
@@ -85,9 +205,27 @@ const AppContent: React.FC = () => {
       case '6.1':
         return <AnalisisHppView />;
       case '6.2':
-        return <SimulasiView />;
+        return (
+          <FeatureLockGuard
+            feature="ADVANCED_REPORT"
+            featureName="Simulasi Multi-Skenario Kenaikan Biaya & HPP"
+            minimumPlan="PRO"
+            description="Kalkulasi 'What-If' skenario fluktuasi harga bahan baku, penyesuaian UMR tenaga kerja, dan simulasi sensitivitas margin laba."
+          >
+            <SimulasiView />
+          </FeatureLockGuard>
+        );
       case '6.3':
-        return <BepSensitivitasView />;
+        return (
+          <FeatureLockGuard
+            feature="ADVANCED_REPORT"
+            featureName="Analisis Titik Impas (BEP) & Sensitivitas Multivariat"
+            minimumPlan="PRO"
+            description="Perhitungan Break-Even Point (BEP) nominal Rupiah dan unit produk dengan visualisasi kurva biaya tetap vs variabel."
+          >
+            <BepSensitivitasView />
+          </FeatureLockGuard>
+        );
 
       // 7. LAPORAN
       case '7.1':
@@ -146,12 +284,50 @@ const AppContent: React.FC = () => {
         {/* Scrollable Viewport with soft padding */}
         <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-7">
           <div className="max-w-[1600px] mx-auto space-y-6">
+            {/* Graceful Expiration / Read-Only Mode Warning Banner */}
+            {isReadOnly && (
+              <div className="bg-amber-500/15 border-2 border-amber-500/30 rounded-2xl p-4 sm:p-5 flex items-start gap-4 shadow-sm animate-in fade-in">
+                <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-800 shrink-0">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-sm text-amber-950">
+                      Mode Baca-Saja (Read-Only Mode): Masa Langganan Telah Berakhir
+                    </span>
+                    <span className="text-[10px] font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full uppercase">
+                      {activeSubscription?.status || 'EXPIRED'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-800/90 mt-1">
+                    Seluruh data bisnis, formula HPP, dan laporan Anda tetap aman dan dapat dilihat atau diekspor. Namun, penambahan transaksi baru dan pengubahan data dinonaktifkan sementara.
+                  </p>
+                  <div className="mt-3 flex items-center gap-3">
+                    <button
+                      onClick={() => setCurrentMenu('8.4.6')}
+                      className="px-3.5 py-1.5 bg-amber-700 hover:bg-amber-800 text-white font-bold text-xs rounded-xl shadow-xs transition"
+                    >
+                      Lihat Status Paket & Subscription
+                    </button>
+                    <span className="text-xs text-amber-800/70">
+                      Hubungi Super Admin platform untuk aktivasi atau perpanjangan.
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {renderView()}
           </div>
         </main>
       </div>
 
       {/* Global Modals & Notifications */}
+      <UpgradePlanModal
+        isOpen={isUpgradeModalOpen}
+        onClose={() => setIsUpgradeModalOpen(false)}
+        recommendedPlanCode={targetUpgradePlan}
+      />
       <QuickSearchModal />
       <ToastContainer />
     </div>

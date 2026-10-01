@@ -13,6 +13,8 @@ import {
   CheckCircle2,
   AlertTriangle,
   Settings,
+  Sparkles,
+  Zap,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -29,8 +31,11 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
     availableUsers,
     setCurrentMenu,
     setIsQuickSearchOpen,
+    setIsSuperAdminPortalOpen,
     rawMaterials,
     products,
+    setIsOnboardingOpen,
+    openUpgradeModal,
   } = useApp();
 
   const [isTenantDropdownOpen, setIsTenantDropdownOpen] = useState(false);
@@ -200,6 +205,16 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
           )}
         </div>
 
+        {/* Panduan Onboarding Icon Button */}
+        <button
+          onClick={() => setIsOnboardingOpen(true)}
+          className="h-9 px-2.5 rounded-xl bg-white border border-slate-200/90 text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50/70 flex items-center gap-1.5 transition-all shadow-2xs font-semibold text-xs"
+          title="Panduan Onboarding Bisnis & Setup Awal"
+        >
+          <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+          <span className="hidden xl:inline">Panduan Setup</span>
+        </button>
+
         {/* Settings Icon Button */}
         <button
           onClick={() => setCurrentMenu('8.4.1')}
@@ -271,6 +286,36 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
               </div>
 
               <div className="border-t border-slate-100 mt-2 pt-1">
+                <button
+                  onClick={() => {
+                    openUpgradeModal('PRO');
+                    setIsUserDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-xs text-amber-800 bg-amber-50 hover:bg-amber-100 font-bold transition-colors cursor-pointer"
+                >
+                  <Zap className="w-3.5 h-3.5 text-amber-600 fill-amber-600" />
+                  <span>Tingkatkan Paket Langganan</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setIsOnboardingOpen(true);
+                    setIsUserDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-xs text-indigo-700 hover:bg-indigo-50 font-medium transition-colors cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Panduan Onboarding Bisnis</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setIsSuperAdminPortalOpen(true);
+                    setIsUserDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-xs text-indigo-700 bg-indigo-50/60 hover:bg-indigo-100 font-semibold transition-colors"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Portal Super Admin (/admin)</span>
+                </button>
                 <button
                   onClick={() => {
                     setCurrentMenu('8.1');
