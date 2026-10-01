@@ -319,15 +319,19 @@ apiRouter.post('/auth/forgot-password', (req: Request, res: Response) => {
     const user = db.prepare('SELECT id, name FROM users WHERE LOWER(email) = ?').get(cleanEmail) as any;
 
     if (!user) {
-      // Return success-like response to prevent user enumeration
+      // Return identical response to prevent user enumeration
       return res.json({
         success: true,
         message: 'Jika alamat email terdaftar, petunjuk pemulihan kata sandi telah dikirimkan ke email Anda.',
       });
     }
 
+    // Invalidate any previous unused tokens for this user
+    db.prepare('UPDATE password_reset_tokens SET used = 1 WHERE user_id = ? AND used = 0').run(user.id);
+
+    // Cryptographically secure temporary token with 15-minute expiry
     const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour expiry
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const id = `pwd_tok_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
 
     db.prepare(`
@@ -335,10 +339,14 @@ apiRouter.post('/auth/forgot-password', (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, 0, ?)
     `).run(id, user.id, token, expiresAt, new Date().toISOString());
 
+    // Security Hardening: Never return the token in the API response
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[Security/DevOnly] Password reset token generated for ${cleanEmail}: ${token} (expires in 15m)`);
+    }
+
     return res.json({
       success: true,
-      token, // Returned for dev/demo and automated testing verification
-      message: 'Petunjuk reset kata sandi telah diterbitkan. Silakan gunakan token yang diberikan untuk mengatur kata sandi baru.',
+      message: 'Jika alamat email terdaftar, petunjuk pemulihan kata sandi telah dikirimkan ke email Anda.',
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'ServerError', message: 'Gagal memproses permohonan reset kata sandi.' });
@@ -349,8 +357,8 @@ apiRouter.post('/auth/forgot-password', (req: Request, res: Response) => {
 apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
   try {
     const { token, newPassword } = req.body;
-    if (!token || !newPassword || newPassword.length < 6) {
-      return res.status(400).json({ error: 'BadRequest', message: 'Token dan kata sandi baru (minimal 6 karakter) diperlukan.' });
+    if (!token || !newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
+      return res.status(400).json({ error: 'BadRequest', message: 'Token dan kata sandi baru (minimal 8 karakter) diperlukan.' });
     }
 
     const tokenRow = db.prepare(`
@@ -364,7 +372,7 @@ apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
     }
 
     if (tokenRow.used === 1) {
-      return res.status(400).json({ error: 'BadRequest', message: 'Token reset kata sandi sudah pernah digunakan.' });
+      return res.status(400).json({ error: 'BadRequest', message: 'Token reset kata sandi sudah pernah digunakan (single-use).' });
     }
 
     if (new Date(tokenRow.expires_at) < new Date()) {
@@ -374,8 +382,10 @@ apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
     const salt = generateSaltServer();
     const pwdHash = hashPasswordServer(newPassword, salt);
 
+    // Update password, mark token as used, and invalidate any previous active sessions for security
     db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(pwdHash, salt, tokenRow.user_id);
     db.prepare('UPDATE password_reset_tokens SET used = 1 WHERE id = ?').run(tokenRow.id);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(tokenRow.user_id);
 
     return res.json({
       success: true,
@@ -423,22 +433,32 @@ apiRouter.post('/auth/switch-tenant', authenticate, (req: Request, res: Response
     return res.status(404).json({ error: 'NotFound', message: 'Bisnis target tidak ditemukan.' });
   }
 
-  // Find an admin or first user in that business for seamless testing
-  const userRow = (db.prepare('SELECT * FROM users WHERE business_id = ? ORDER BY CASE WHEN role = "Administrator" THEN 1 ELSE 2 END LIMIT 1').get(targetBusinessId) ||
-    db.prepare('SELECT * FROM users WHERE id = ?').get(req.auth!.userId)) as any;
+  // Security Hardening: Authorization validation on server
+  // Only SUPER_ADMIN or users who have an active account in the target business can switch
+  let targetUserRow: any = null;
+  if (req.auth!.userRole === 'SUPER_ADMIN') {
+    targetUserRow = db.prepare('SELECT * FROM users WHERE business_id = ? ORDER BY CASE WHEN role = "Administrator" THEN 1 ELSE 2 END LIMIT 1').get(targetBusinessId) ||
+      db.prepare('SELECT * FROM users WHERE id = ?').get(req.auth!.userId);
+  } else {
+    targetUserRow = db.prepare('SELECT * FROM users WHERE business_id = ? AND LOWER(email) = ? AND active = 1')
+      .get(targetBusinessId, req.auth!.userEmail.toLowerCase());
+  }
 
-  if (!userRow) {
-    return res.status(404).json({ error: 'NotFound', message: 'Tidak ada pengguna di bisnis target.' });
+  if (!targetUserRow) {
+    return res.status(403).json({
+      error: 'Forbidden',
+      message: 'Akses ditolak: Anda tidak memiliki akun aktif pada bisnis target.',
+    });
   }
 
   // Invalidate old session, create new session for target business
   invalidateSession(req.auth!.token);
-  const newToken = createSession(userRow.id, targetBusinessId);
+  const newToken = createSession(targetUserRow.id, targetBusinessId);
 
   logAudit(
     targetBusinessId,
-    userRow.id,
-    userRow.name,
+    targetUserRow.id,
+    targetUserRow.name,
     'Switch Tenant',
     'Sistem',
     `Beralih ruang kerja ke ${bizRow.name}.`
@@ -447,7 +467,7 @@ apiRouter.post('/auth/switch-tenant', authenticate, (req: Request, res: Response
   return res.json({
     success: true,
     token: newToken,
-    user: JSON.parse(userRow.data_json),
+    user: JSON.parse(targetUserRow.data_json),
     business: JSON.parse(bizRow.data_json),
   });
 });
@@ -463,10 +483,21 @@ apiRouter.get('/business/current', authenticate, (req: Request, res: Response) =
 });
 
 apiRouter.get('/business/all', authenticate, (req: Request, res: Response) => {
-  // Returns available businesses for the tenant switcher
-  const rows = db.prepare('SELECT data_json FROM businesses ORDER BY created_at ASC').all() as any[];
-  const list = rows.map((r) => JSON.parse(r.data_json));
-  return res.json(list);
+  // Security Hardening: Super Admin can see all businesses; regular users only see businesses they belong to
+  if (req.auth?.userRole === 'SUPER_ADMIN') {
+    const rows = db.prepare('SELECT data_json FROM businesses ORDER BY created_at ASC').all() as any[];
+    return res.json(rows.map((r) => JSON.parse(r.data_json)));
+  }
+
+  const rows = db.prepare(`
+    SELECT DISTINCT b.data_json
+    FROM businesses b
+    JOIN users u ON u.business_id = b.id
+    WHERE LOWER(u.email) = ? AND u.active = 1
+    ORDER BY b.created_at ASC
+  `).all(req.auth!.userEmail.toLowerCase()) as any[];
+
+  return res.json(rows.map((r) => JSON.parse(r.data_json)));
 });
 
 // ==========================================
@@ -481,10 +512,15 @@ apiRouter.get('/users', authenticate, (req: Request, res: Response) => {
 
 apiRouter.post('/users', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner'], 'create'), (req: Request, res: Response) => {
   try {
-    const { name, email, role, phone, active = true, avatar, password = 'User123!' } = req.body;
+    const { name, email, role, phone, active = true, avatar, password } = req.body;
     if (!name || !email) {
       return res.status(400).json({ error: 'BadRequest', message: 'Nama dan email wajib diisi.' });
     }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    const finalPassword = (password && typeof password === 'string' && password.length >= 8)
+      ? password
+      : crypto.randomBytes(6).toString('hex') + 'A1!';
 
     // Role Escalation Check: Business users CANNOT assign SUPER_ADMIN
     if (role === 'SUPER_ADMIN' && req.auth?.userRole !== 'SUPER_ADMIN') {
@@ -508,7 +544,6 @@ apiRouter.post('/users', authenticate, enforceSubscriptionAccess, requireRole(['
       }
     }
 
-    const cleanEmail = String(email).trim().toLowerCase();
     const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').get(cleanEmail);
     if (existing) {
       return res.status(409).json({ error: 'Conflict', message: 'Email sudah digunakan oleh akun lain.' });
@@ -516,7 +551,7 @@ apiRouter.post('/users', authenticate, enforceSubscriptionAccess, requireRole(['
 
     const id = `usr_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
     const salt = generateSaltServer();
-    const pwdHash = hashPasswordServer(password, salt);
+    const pwdHash = hashPasswordServer(finalPassword, salt);
     const createdAt = new Date().toISOString();
 
     const userObj = {
@@ -816,6 +851,46 @@ apiRouter.delete('/suppliers/:id', authenticate, requireRole(['Administrator', '
 });
 
 // ==========================================
+// 6B. CUSTOMERS / PELANGGAN (ISOLATED TO BUSINESS)
+// ==========================================
+
+apiRouter.get('/customers', authenticate, (req: Request, res: Response) => {
+  const rows = db.prepare('SELECT data_json FROM customers WHERE business_id = ?').all(req.businessId!) as any[];
+  return res.json(rows.map((r) => JSON.parse(r.data_json)));
+});
+
+apiRouter.post('/customers', authenticate, requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant'], 'create'), (req: Request, res: Response) => {
+  const cust = req.body;
+  const id = cust.id || `cust_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+  const item = { ...cust, id, businessId: req.businessId!, tenantId: req.businessId! };
+
+  db.prepare('INSERT INTO customers (id, business_id, code, name, status, data_json) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id, req.businessId!, item.code || 'CUST', item.name, item.status || 'Aktif', JSON.stringify(item));
+
+  logAudit(req.businessId!, req.auth!.userId, req.auth!.userName, 'Tambah Pelanggan', 'Pelanggan', `Menambahkan pelanggan ${item.name}.`);
+  return res.status(201).json(item);
+});
+
+apiRouter.put('/customers/:id', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'edit'), (req: Request, res: Response) => {
+  const { id } = req.params;
+  const existing = db.prepare('SELECT data_json FROM customers WHERE id = ? AND business_id = ?').get(id, req.businessId!) as any;
+  if (!existing) return res.status(404).json({ error: 'NotFound', message: 'Pelanggan tidak ditemukan dalam bisnis ini.' });
+
+  const updated = { ...JSON.parse(existing.data_json), ...req.body, id, businessId: req.businessId!, tenantId: req.businessId! };
+  db.prepare('UPDATE customers SET code = ?, name = ?, status = ?, data_json = ? WHERE id = ? AND business_id = ?')
+    .run(updated.code, updated.name, updated.status || 'Aktif', JSON.stringify(updated), id, req.businessId!);
+
+  return res.json(updated);
+});
+
+apiRouter.delete('/customers/:id', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'delete'), (req: Request, res: Response) => {
+  const { id } = req.params;
+  const resRun = db.prepare('DELETE FROM customers WHERE id = ? AND business_id = ?').run(id, req.businessId!);
+  if (resRun.changes === 0) return res.status(404).json({ error: 'NotFound', message: 'Pelanggan tidak ditemukan dalam bisnis ini.' });
+  return res.json({ success: true });
+});
+
+// ==========================================
 // 7. CATEGORIES & UNITS
 // ==========================================
 
@@ -997,6 +1072,15 @@ apiRouter.put('/production/batches/:id', authenticate, requireRole(['Administrat
   return res.json(updated);
 });
 
+apiRouter.delete('/production/batches/:id', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'delete'), (req: Request, res: Response) => {
+  const { id } = req.params;
+  const resRun = db.prepare('DELETE FROM production_batches WHERE id = ? AND business_id = ?').run(id, req.businessId!);
+  if (resRun.changes === 0) return res.status(404).json({ error: 'NotFound', message: 'Batch produksi tidak ditemukan dalam bisnis ini.' });
+
+  logAudit(req.businessId!, req.auth!.userId, req.auth!.userName, 'Hapus SPK', 'Produksi', `Menghapus batch produksi ID: ${id}`);
+  return res.json({ success: true });
+});
+
 // ==========================================
 // 10. PURCHASES & INVENTORY
 // ==========================================
@@ -1037,6 +1121,15 @@ apiRouter.put('/purchases/orders/:id/status', authenticate, requireRole(['Admini
 
   logAudit(req.businessId!, req.auth!.userId, req.auth!.userName, 'Status PO', 'Pembelian', `Mengubah status PO ${updated.poNumber} menjadi ${status}.`);
   return res.json(updated);
+});
+
+apiRouter.delete('/purchases/orders/:id', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'delete'), (req: Request, res: Response) => {
+  const { id } = req.params;
+  const resRun = db.prepare('DELETE FROM purchase_orders WHERE id = ? AND business_id = ?').run(id, req.businessId!);
+  if (resRun.changes === 0) return res.status(404).json({ error: 'NotFound', message: 'Purchase Order tidak ditemukan dalam bisnis ini.' });
+
+  logAudit(req.businessId!, req.auth!.userId, req.auth!.userName, 'Hapus PO', 'Pembelian', `Menghapus purchase order ID: ${id}`);
+  return res.json({ success: true });
 });
 
 apiRouter.get('/inventory/movements', authenticate, (req: Request, res: Response) => {
@@ -1324,7 +1417,7 @@ apiRouter.get('/admin/businesses', authenticate, requireSuperAdmin, (req: Reques
 
 apiRouter.post('/admin/businesses', authenticate, requireSuperAdmin, (req: Request, res: Response) => {
   try {
-    const { name, industry, planId = 'plan_starter', ownerName, ownerEmail, ownerPhone, status = 'ACTIVE' } = req.body;
+    const { name, industry, planId = 'plan_starter', ownerName, ownerEmail, ownerPhone, status = 'ACTIVE', ownerPassword } = req.body;
     if (!name || !ownerName || !ownerEmail) {
       return res.status(400).json({ error: 'BadRequest', message: 'Nama bisnis, nama pemilik, dan email wajib diisi.' });
     }
@@ -1338,7 +1431,10 @@ apiRouter.post('/admin/businesses', authenticate, requireSuperAdmin, (req: Reque
     const businessId = `biz_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
     const ownerId = `usr_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
     const salt = generateSaltServer();
-    const pwdHash = hashPasswordServer('Admin123!', salt);
+    const initialPwd = (ownerPassword && typeof ownerPassword === 'string' && ownerPassword.length >= 8)
+      ? ownerPassword
+      : crypto.randomBytes(6).toString('hex') + 'A1!';
+    const pwdHash = hashPasswordServer(initialPwd, salt);
     const now = new Date().toISOString();
 
     const planRow = db.prepare('SELECT * FROM plans WHERE id = ? OR code = ?').get(planId, planId) as any;
@@ -1710,8 +1806,11 @@ apiRouter.get('/admin/audit-logs', authenticate, requireSuperAdmin, (req: Reques
 
 apiRouter.post('/admin/reset-user-password', authenticate, requireSuperAdmin, (req: Request, res: Response) => {
   try {
-    const { userId, newPassword = 'Password123!' } = req.body;
+    const { userId, newPassword } = req.body;
     if (!userId) return res.status(400).json({ error: 'BadRequest', message: 'User ID wajib diisi.' });
+    if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
+      return res.status(400).json({ error: 'BadRequest', message: 'Password baru wajib diisi dan minimal 8 karakter.' });
+    }
 
     const user = db.prepare('SELECT id, business_id, name, email FROM users WHERE id = ?').get(userId) as any;
     if (!user) return res.status(404).json({ error: 'NotFound', message: 'Pengguna tidak ditemukan.' });
@@ -1719,6 +1818,9 @@ apiRouter.post('/admin/reset-user-password', authenticate, requireSuperAdmin, (r
     const salt = generateSaltServer();
     const pwdHash = hashPasswordServer(newPassword, salt);
     db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?').run(pwdHash, salt, userId);
+
+    // Security Hardening: Invalidate all active sessions for the user upon administrative password reset
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
 
     logAdminAudit(
       req.auth!.userId,
@@ -1731,7 +1833,7 @@ apiRouter.post('/admin/reset-user-password', authenticate, requireSuperAdmin, (r
       { userEmail: user.email, userName: user.name }
     );
 
-    return res.json({ success: true, message: `Password pengguna ${user.name} berhasil direset.` });
+    return res.json({ success: true, message: `Password pengguna ${user.name} berhasil direset dan seluruh sesi aktif telah dibatalkan.` });
   } catch (err: any) {
     return res.status(500).json({ error: 'ServerError', message: err.message });
   }
@@ -1818,6 +1920,13 @@ apiRouter.post('/users/invite', authenticate, enforceSubscriptionAccess, require
 apiRouter.get('/users/invitations', authenticate, (req: Request, res: Response) => {
   const rows = db.prepare('SELECT * FROM invitations WHERE business_id = ? ORDER BY created_at DESC').all(req.businessId!) as any[];
   return res.json(rows);
+});
+
+apiRouter.delete('/users/invitations/:id', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'delete'), (req: Request, res: Response) => {
+  const { id } = req.params;
+  const resRun = db.prepare('DELETE FROM invitations WHERE id = ? AND business_id = ?').run(id, req.businessId!);
+  if (resRun.changes === 0) return res.status(404).json({ error: 'NotFound', message: 'Undangan tidak ditemukan dalam bisnis ini.' });
+  return res.json({ success: true, message: 'Undangan berhasil dibatalkan.' });
 });
 
 // Feature entitlement test endpoint for ADVANCED_REPORT

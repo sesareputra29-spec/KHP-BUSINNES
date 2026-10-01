@@ -15,6 +15,7 @@ import {
   Settings,
   Sparkles,
   Zap,
+  Compass,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -36,6 +37,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
     products,
     setIsOnboardingOpen,
     openUpgradeModal,
+    setIsTourOpen,
   } = useApp();
 
   const [isTenantDropdownOpen, setIsTenantDropdownOpen] = useState(false);
@@ -61,14 +63,14 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
         )}
 
         {/* Tenant Switcher Dropdown (Minimalist) */}
-        <div className="relative shrink-0">
+        <div className="relative shrink-0" data-tour="tenant-selector">
           <button
             onClick={() => {
               setIsTenantDropdownOpen(!isTenantDropdownOpen);
               setIsUserDropdownOpen(false);
               setIsNotifOpen(false);
             }}
-            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white border border-slate-200/90 hover:border-slate-300 hover:bg-slate-50 transition-all text-left shadow-2xs"
+            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white border border-slate-200/90 hover:border-slate-300 hover:bg-slate-50 transition-all text-left shadow-2xs cursor-pointer"
           >
             <div className="w-5 h-5 rounded-lg bg-slate-900 text-white font-black text-[10px] flex items-center justify-center">
               {currentTenant.logoText}
@@ -116,10 +118,10 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
         </div>
 
         {/* Global Pill Search Bar matching screenshot */}
-        <div className="flex-1 min-w-[200px] hidden sm:block">
+        <div className="flex-1 min-w-[200px] hidden sm:block" data-tour="quick-search">
           <button
             onClick={() => setIsQuickSearchOpen(true)}
-            className="w-full flex items-center justify-between px-4 py-2 text-xs text-slate-400 bg-white hover:bg-slate-50 rounded-full border border-slate-200/90 hover:border-slate-300 transition-all text-left shadow-2xs"
+            className="w-full flex items-center justify-between px-4 py-2 text-xs text-slate-400 bg-white hover:bg-slate-50 rounded-full border border-slate-200/90 hover:border-slate-300 transition-all text-left shadow-2xs cursor-pointer"
           >
             <div className="flex items-center gap-2.5">
               <Search className="w-4 h-4 text-slate-400 shrink-0" />
@@ -208,31 +210,45 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
         {/* Panduan Onboarding Icon Button */}
         <button
           onClick={() => setIsOnboardingOpen(true)}
-          className="h-9 px-2.5 rounded-xl bg-white border border-slate-200/90 text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50/70 flex items-center gap-1.5 transition-all shadow-2xs font-semibold text-xs"
+          data-tour="onboarding-guide-btn"
+          className="h-9 px-2.5 rounded-xl bg-white border border-slate-200/90 text-indigo-700 hover:text-indigo-900 hover:bg-indigo-50/70 flex items-center gap-1.5 transition-all shadow-2xs font-semibold text-xs cursor-pointer"
           title="Panduan Onboarding Bisnis & Setup Awal"
         >
           <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
           <span className="hidden xl:inline">Panduan Setup</span>
         </button>
 
+        {/* Tombol Walkthrough Interaktif Dashboard */}
+        <button
+          onClick={() => {
+            setCurrentMenu('1.1');
+            setIsTourOpen(true);
+          }}
+          className="h-9 px-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white flex items-center gap-1.5 transition-all shadow-xs font-bold text-xs cursor-pointer"
+          title="Mulai Tur Interaktif Fitur Dashboard (Walkthrough)"
+        >
+          <Compass className="w-3.5 h-3.5 text-lime-400" />
+          <span className="hidden sm:inline">Tur Fitur</span>
+        </button>
+
         {/* Settings Icon Button */}
         <button
           onClick={() => setCurrentMenu('8.4.1')}
-          className="w-9 h-9 rounded-xl bg-white border border-slate-200/90 text-slate-600 hover:text-slate-900 hover:bg-slate-50 flex items-center justify-center transition-all shadow-2xs"
+          className="w-9 h-9 rounded-xl bg-white border border-slate-200/90 text-slate-600 hover:text-slate-900 hover:bg-slate-50 flex items-center justify-center transition-all shadow-2xs cursor-pointer"
           title="Pengaturan Sistem"
         >
           <Settings className="w-4 h-4" />
         </button>
 
         {/* User Profile Pill matching screenshot (Avatar + Name + Email) */}
-        <div className="relative">
+        <div className="relative" data-tour="user-profile">
           <button
             onClick={() => {
               setIsUserDropdownOpen(!isUserDropdownOpen);
               setIsTenantDropdownOpen(false);
               setIsNotifOpen(false);
             }}
-            className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-white border border-slate-200/90 hover:border-slate-300 hover:bg-slate-50 transition-all shadow-2xs"
+            className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-white border border-slate-200/90 hover:border-slate-300 hover:bg-slate-50 transition-all shadow-2xs cursor-pointer"
           >
             <img
               src={currentUser.avatar}
@@ -305,6 +321,17 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
                 >
                   <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
                   <span>Panduan Onboarding Bisnis</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setCurrentMenu('1.1');
+                    setIsTourOpen(true);
+                    setIsUserDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-xs text-slate-800 hover:bg-slate-100 font-semibold transition-colors cursor-pointer"
+                >
+                  <Compass className="w-3.5 h-3.5 text-slate-900" />
+                  <span>Mulai Tur Fitur (Walkthrough)</span>
                 </button>
                 <button
                   onClick={() => {

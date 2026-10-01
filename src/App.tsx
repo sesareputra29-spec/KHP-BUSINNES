@@ -39,6 +39,7 @@ import { LandingPageView } from './components/public/LandingPageView';
 import { PricingPageView } from './components/public/PricingPageView';
 import { RegisterView } from './components/public/RegisterView';
 import { OnboardingWizardView } from './components/onboarding/OnboardingWizardView';
+import { DashboardWalkthrough } from './components/common/DashboardWalkthrough';
 
 const AppContent: React.FC = () => {
   const {
@@ -54,6 +55,8 @@ const AppContent: React.FC = () => {
     isUpgradeModalOpen,
     setIsUpgradeModalOpen,
     targetUpgradePlan,
+    isTourOpen,
+    setIsTourOpen,
   } = useApp();
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -235,6 +238,7 @@ const AppContent: React.FC = () => {
       case '8.1':
       case '8.2':
       case '8.3':
+      case '8.4':
       case '8.4.1':
       case '8.4.2':
       case '8.4.3':
@@ -323,6 +327,10 @@ const AppContent: React.FC = () => {
       </div>
 
       {/* Global Modals & Notifications */}
+      <DashboardWalkthrough
+        runTour={isTourOpen}
+        onCloseTour={() => setIsTourOpen(false)}
+      />
       <UpgradePlanModal
         isOpen={isUpgradeModalOpen}
         onClose={() => setIsUpgradeModalOpen(false)}

@@ -64,6 +64,8 @@ interface AppContextType {
   setIsUpgradeModalOpen: (open: boolean) => void;
   openUpgradeModal: (selectedPlan?: string) => void;
   targetUpgradePlan: string;
+  isTourOpen: boolean;
+  setIsTourOpen: (open: boolean) => void;
 
   // Multi-Business / Multi-Tenant
   currentTenant: Tenant;
@@ -205,6 +207,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [targetUpgradePlan, setTargetUpgradePlan] = useState('PRO');
+  const [isTourOpen, setIsTourOpen] = useState(false);
+
+  // Auto-launch walkthrough on first login when arriving on Dashboard
+  useEffect(() => {
+    if (isAuthenticated && !isOnboardingOpen && currentMenu === '1.1') {
+      try {
+        const hasSeen = localStorage.getItem('hasSeenDashboardTour');
+        if (!hasSeen) {
+          const timer = setTimeout(() => {
+            setIsTourOpen(true);
+          }, 1200);
+          return () => clearTimeout(timer);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }, [isAuthenticated, isOnboardingOpen, currentMenu]);
 
   const openUpgradeModal = useCallback((selectedPlan = 'PRO') => {
     setTargetUpgradePlan(selectedPlan);
@@ -834,6 +854,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsUpgradeModalOpen,
     openUpgradeModal,
     targetUpgradePlan,
+    isTourOpen,
+    setIsTourOpen,
     currentTenant,
     currentBusinessId: currentTenant.id,
     setCurrentTenant: setCurrentTenantState,

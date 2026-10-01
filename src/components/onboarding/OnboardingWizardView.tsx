@@ -16,6 +16,7 @@ import {
   Cake,
   Boxes,
   Zap,
+  Compass,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { useApp } from '../../context/AppContext';
@@ -25,7 +26,7 @@ interface OnboardingWizardViewProps {
 }
 
 export const OnboardingWizardView: React.FC<OnboardingWizardViewProps> = ({ onComplete }) => {
-  const { currentTenant, setCurrentTenant, showToast, refreshSubscription, products, rawMaterials, boms } = useApp();
+  const { currentTenant, setCurrentTenant, showToast, refreshSubscription, products, rawMaterials, boms, setIsTourOpen } = useApp();
   const [currentStep, setCurrentStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -710,11 +711,22 @@ export const OnboardingWizardView: React.FC<OnboardingWizardViewProps> = ({ onCo
               <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
                 <button
                   type="button"
-                  onClick={onComplete}
-                  className="w-full sm:w-auto px-8 py-3 bg-slate-950 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
+                  onClick={() => {
+                    setIsTourOpen(true);
+                    onComplete();
+                  }}
+                  className="w-full sm:w-auto px-7 py-3 bg-slate-950 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
                 >
-                  <span>Buka Dashboard & Mulai Hitung HPP</span>
+                  <Compass className="w-4 h-4 text-lime-400" />
+                  <span>Buka Dashboard & Mulai Tur Fitur</span>
                   <ArrowRight className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={onComplete}
+                  className="w-full sm:w-auto px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs rounded-xl transition-all cursor-pointer"
+                >
+                  <span>Langsung ke Dashboard</span>
                 </button>
               </div>
             </div>

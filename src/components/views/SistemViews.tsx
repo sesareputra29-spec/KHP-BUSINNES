@@ -25,6 +25,7 @@ import {
   Building,
   DollarSign,
   Tag,
+  Scale,
   Scale3d,
   Layers,
   Calculator,
@@ -40,10 +41,12 @@ import {
   Zap,
   AlertTriangle,
   Award,
+  Compass,
 } from 'lucide-react';
 import { DataPipelineCard } from '../common/DataPipelineCard';
 import { DataPipelineModal } from '../common/DataPipelineModal';
 import { RoleAndPermissionView } from './RoleAndPermissionView';
+import { SettingsSubNav } from '../common/SettingsSubNav';
 
 interface SistemViewsProps {
   subModule: MenuId;
@@ -81,6 +84,7 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
     rawMaterials,
     boms,
     refreshSubscription,
+    setIsTourOpen,
   } = useApp();
 
   // 8.1 Profile State
@@ -842,39 +846,25 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
   // -------------------------------------------------------------
   // 8.4.1 KATEGORI PRODUK & 8.4.2 KATEGORI BAHAN BAKU
   // -------------------------------------------------------------
-  if (subModule === '8.4.1' || subModule === '8.4.2') {
-    const isProductCat = subModule === '8.4.1';
+  if (subModule === '8.4' || subModule === '8.4.1' || subModule === '8.4.2') {
+    const isProductCat = subModule === '8.4' || subModule === '8.4.1';
     const currentCats = categories.filter((c) =>
       isProductCat ? c.type === 'PRODUCT' : c.type === 'MATERIAL'
     );
 
     return (
-      <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold uppercase tracking-wider bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
-                {isProductCat ? 'Kategori Produk' : 'Kategori Bahan Baku'}
-              </span>
-            </div>
-            <h1 className="text-xl font-bold text-slate-900 mt-1">
-              {isProductCat ? 'Pengelompokan Produk Jadi' : 'Pengelompokan Bahan Baku & Kemasan'}
-            </h1>
-          </div>
-
-          <button
-            onClick={() => {
-              setCatName('');
-              setCatCode('');
-              setCatType(isProductCat ? 'PRODUCT' : 'MATERIAL');
-              setIsCatModalOpen(true);
-            }}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Tambah Kategori</span>
-          </button>
-        </div>
+      <div className="space-y-6 animate-in fade-in duration-200">
+        <SettingsSubNav
+          activeTab={subModule === '8.4' ? '8.4.1' : subModule}
+          onTabChange={setCurrentMenu}
+          onAddAction={() => {
+            setCatName('');
+            setCatCode('');
+            setCatType(isProductCat ? 'PRODUCT' : 'MATERIAL');
+            setIsCatModalOpen(true);
+          }}
+          addActionLabel={`Tambah ${isProductCat ? 'Kategori Produk' : 'Kategori Bahan'}`}
+        />
 
         <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
           <table className="w-full text-left text-xs border-collapse">
@@ -982,33 +972,17 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
   // -------------------------------------------------------------
   if (subModule === '8.4.3') {
     return (
-      <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold uppercase tracking-wider bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
-                Satuan Ukuran (UOM)
-              </span>
-              <span className="text-xs text-slate-500 font-mono">{units.length} Satuan</span>
-            </div>
-            <h1 className="text-xl font-bold text-slate-900 mt-1">Satuan Ukuran & Standar Konversi</h1>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Daftar unit pengukuran bahan baku (kg, gr, liter, ml, zak, butir, pcs) untuk akurasi formula.
-            </p>
-          </div>
-
-          <button
-            onClick={() => {
-              setUnitCode('');
-              setUnitName('');
-              setIsUnitModalOpen(true);
-            }}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Tambah Satuan</span>
-          </button>
-        </div>
+      <div className="space-y-6 animate-in fade-in duration-200">
+        <SettingsSubNav
+          activeTab="8.4.3"
+          onTabChange={setCurrentMenu}
+          onAddAction={() => {
+            setUnitCode('');
+            setUnitName('');
+            setIsUnitModalOpen(true);
+          }}
+          addActionLabel="Tambah Satuan"
+        />
 
         <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
           <table className="w-full text-left text-xs border-collapse">
@@ -1117,21 +1091,8 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
   // -------------------------------------------------------------
   if (subModule === '8.4.4' || subModule === '8.4.5' || subModule === '8.4.6') {
     return (
-      <div className="max-w-3xl space-y-6">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
-              {subModule === '8.4.4' && 'Pengaturan HPP'}
-              {subModule === '8.4.5' && 'Pengaturan Biaya'}
-              {subModule === '8.4.6' && 'Pengaturan Perusahaan'}
-            </span>
-          </div>
-          <h1 className="text-xl font-bold text-slate-900 mt-1">
-            {subModule === '8.4.4' && 'Pengaturan Formula & Metode HPP Default'}
-            {subModule === '8.4.5' && 'Pengaturan Tarif Dasar Tenaga Kerja & BOP'}
-            {subModule === '8.4.6' && 'Profil Identitas Perusahaan & Legalitas'}
-          </h1>
-        </div>
+      <div className="max-w-4xl space-y-6 animate-in fade-in duration-200">
+        <SettingsSubNav activeTab={subModule} onTabChange={setCurrentMenu} />
 
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs space-y-5 text-xs">
           {subModule === '8.4.4' && (
@@ -1686,6 +1647,31 @@ export const SistemViews: React.FC<SistemViewsProps> = ({ subModule }) => {
           <p className="text-xs text-slate-500 mt-0.5">
             Panduan lengkap memahami alur hubungan data sistem serta prinsip kalkulasi HPP presisi bagi pengusaha F&B, manufaktur, dan UMKM.
           </p>
+        </div>
+
+        {/* Walkthrough Interactive Quick Launcher */}
+        <div className="bg-gradient-to-r from-slate-900 to-indigo-950 text-white p-5 rounded-2xl border border-slate-800 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-white/10 text-lime-400 flex items-center justify-center shrink-0">
+              <Compass className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="font-bold text-sm text-white">Tur Fitur Interaktif Dashboard (Walkthrough)</div>
+              <p className="text-xs text-slate-300 mt-0.5">
+                Ingin dipandu langsung langkah-demi-langkah menjelajahi fitur-fitur kunci di dashboard dengan sorotan visual?
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              setCurrentMenu('1.1');
+              setIsTourOpen(true);
+            }}
+            className="px-5 py-2.5 bg-lime-400 hover:bg-lime-300 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+          >
+            <Compass className="w-4 h-4 text-slate-950" />
+            <span>Mulai Tur Sekarang</span>
+          </button>
         </div>
 
         {/* 12-Stage Data Architecture Pipeline Visual Section */}

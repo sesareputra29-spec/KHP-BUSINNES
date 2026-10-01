@@ -318,7 +318,7 @@ export const DashboardView: React.FC = () => {
       {/* ============================================================== */}
       {/* BANNER 1: HUBUNGAN TERINTEGRASI DASHBOARD DENGAN PUSAT LAPORAN */}
       {/* ============================================================== */}
-      <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white p-5 rounded-2xl md:rounded-3xl shadow-md border border-blue-800/40">
+      <div data-tour="executive-banner" className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white p-5 rounded-2xl md:rounded-3xl shadow-md border border-blue-800/40">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
             <div className="w-10 h-10 rounded-2xl bg-blue-500/20 border border-blue-400/30 text-blue-300 flex items-center justify-center font-bold flex-shrink-0 mt-0.5">
@@ -361,7 +361,7 @@ export const DashboardView: React.FC = () => {
         </div>
 
         {/* Quick KPI Cards from Reports */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-white/10">
+        <div data-tour="kpi-cards" className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-white/10">
           <div
             onClick={() => setCurrentMenu('7.1')}
             className="bg-white/5 hover:bg-white/10 p-3 rounded-xl border border-white/10 transition-all cursor-pointer group"
@@ -442,7 +442,7 @@ export const DashboardView: React.FC = () => {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
             
             {/* Kartu Grafik: Arus Nilai Finansial & Omzet */}
-            <div className="lg:col-span-8 bg-white p-6 rounded-2xl md:rounded-3xl border border-slate-200 shadow-2xs flex flex-col justify-between relative overflow-hidden">
+            <div data-tour="financial-chart" className="lg:col-span-8 bg-white p-6 rounded-2xl md:rounded-3xl border border-slate-200 shadow-2xs flex flex-col justify-between relative overflow-hidden">
               <div>
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -700,7 +700,7 @@ export const DashboardView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             
             {/* 1. Komposisi Biaya Produksi (HPP) */}
-            <div className="bg-white p-5 rounded-2xl md:rounded-3xl border border-slate-200 shadow-2xs flex flex-col justify-between">
+            <div data-tour="cost-breakdown" className="bg-white p-5 rounded-2xl md:rounded-3xl border border-slate-200 shadow-2xs flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between">
                   <h3 className="font-bold text-slate-900 text-sm">Struktur Biaya HPP</h3>
@@ -878,7 +878,7 @@ export const DashboardView: React.FC = () => {
         <div className="xl:col-span-4 space-y-6">
 
           {/* Kartu Operasional & Tombol Aksi Cepat */}
-          <div className="bg-white p-6 rounded-2xl md:rounded-3xl border border-slate-200 shadow-2xs space-y-5">
+          <div data-tour="quick-actions" className="bg-white p-6 rounded-2xl md:rounded-3xl border border-slate-200 shadow-2xs space-y-5">
             
             <div className="flex items-center justify-between">
               <div>

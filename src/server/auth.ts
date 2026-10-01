@@ -43,7 +43,8 @@ declare global {
 }
 
 export function createSession(userId: string, businessId: string, durationDays = 7): string {
-  const token = `sess_${Date.now().toString(36)}_${crypto.randomBytes(16).toString('hex')}`;
+  // Cryptographically secure 32-byte session token
+  const token = `sess_${crypto.randomBytes(32).toString('hex')}`;
   const createdAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
 
@@ -121,22 +122,82 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
     });
   }
 
+  // Check business suspended
+  if (row.business_status === 'suspended' && row.user_role !== 'SUPER_ADMIN') {
+    return res.status(403).json({
+      error: 'BusinessSuspended',
+      message: 'Akses ditolak: Akun bisnis ini sedang ditangguhkan. Silakan hubungi Administrator.',
+    });
+  }
+
   const userObj = row.user_data ? JSON.parse(row.user_data) : {};
+
+  // =========================================================================
+  // MULTI-TENANT ISOLATION: USER → MEMBERSHIP → BUSINESS → RESOURCE
+  // Never blindly trust businessId provided by frontend headers or queries.
+  // =========================================================================
+  const requestedBusinessId = (req.headers['x-business-id'] as string) || (req.query.businessId as string);
+
+  let activeBusinessId = row.business_id;
+  let activeBusinessName = row.business_name;
+  let activeBusinessPlan = row.business_plan;
+  let activeUserRole = row.user_role;
+
+  if (requestedBusinessId && requestedBusinessId !== row.business_id) {
+    if (row.user_role === 'SUPER_ADMIN') {
+      // Super Admin has platform-level oversight
+      const targetBiz = db.prepare('SELECT id, name, plan, status FROM businesses WHERE id = ?').get(requestedBusinessId) as any;
+      if (!targetBiz) {
+        return res.status(404).json({ error: 'NotFound', message: 'Bisnis target tidak ditemukan.' });
+      }
+      activeBusinessId = targetBiz.id;
+      activeBusinessName = targetBiz.name;
+      activeBusinessPlan = targetBiz.plan;
+    } else {
+      // Regular user: Server-side validation of active membership in requested business
+      const membership = db.prepare(`
+        SELECT u.id, u.role, u.active, b.name as business_name, b.plan as business_plan, b.status as business_status
+        FROM users u
+        JOIN businesses b ON u.business_id = b.id
+        WHERE u.business_id = ? AND LOWER(u.email) = ? AND u.active = 1
+      `).get(requestedBusinessId, row.user_email.toLowerCase()) as any;
+
+      if (!membership) {
+        // User A -> Business B: DITOLAK (Strict isolation)
+        return res.status(403).json({
+          error: 'TenantAccessDenied',
+          message: 'Akses ditolak: Anda tidak memiliki keanggotaan (membership) aktif pada bisnis ini.',
+        });
+      }
+
+      if (membership.business_status === 'suspended') {
+        return res.status(403).json({
+          error: 'BusinessSuspended',
+          message: 'Akses ditolak: Bisnis yang diminta sedang ditangguhkan.',
+        });
+      }
+
+      activeBusinessId = requestedBusinessId;
+      activeBusinessName = membership.business_name;
+      activeBusinessPlan = membership.business_plan;
+      activeUserRole = membership.role;
+    }
+  }
 
   req.auth = {
     token: row.token,
     userId: row.user_id,
     userName: row.user_name,
     userEmail: row.user_email,
-    userRole: row.user_role,
+    userRole: activeUserRole,
     userAvatar: userObj.avatar || '',
     userPhone: userObj.phone || '',
-    businessId: row.business_id,
-    businessName: row.business_name,
-    businessPlan: row.business_plan,
+    businessId: activeBusinessId,
+    businessName: activeBusinessName,
+    businessPlan: activeBusinessPlan,
     isSuperAdmin: row.user_role === 'SUPER_ADMIN',
   };
-  req.businessId = row.business_id;
+  req.businessId = activeBusinessId;
 
   next();
 }

@@ -18,6 +18,7 @@ export type MenuId =
   | '8.1' // Profil Pengguna
   | '8.2' // Manajemen Pengguna
   | '8.3' // Role & Hak Akses
+  | '8.4' // Pengaturan Utama
   | '8.4.1' // Kategori Produk
   | '8.4.2' // Kategori Bahan Baku
   | '8.4.3' // Satuan

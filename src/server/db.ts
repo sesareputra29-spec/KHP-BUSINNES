@@ -31,7 +31,8 @@ import {
   mockCompanySettingsKaryaLogam,
 } from '../data/tenantSeedData';
 
-const DB_DIR = path.resolve(process.cwd(), 'data');
+const isVercel = Boolean(process.env.VERCEL);
+const DB_DIR = isVercel ? path.resolve('/tmp', 'data') : path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(DB_DIR)) {
   fs.mkdirSync(DB_DIR, { recursive: true });
 }
@@ -43,7 +44,11 @@ export const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA foreign_keys = ON;');
 db.exec('PRAGMA journal_mode = WAL;');
 
+let isInitialized = false;
+
 export function initDatabase() {
+  if (isInitialized) return;
+  isInitialized = true;
   db.exec(`
     CREATE TABLE IF NOT EXISTS businesses (
       id TEXT PRIMARY KEY,
@@ -116,6 +121,16 @@ export function initDatabase() {
       data_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_suppliers_biz ON suppliers(business_id);
+
+    CREATE TABLE IF NOT EXISTS customers (
+      id TEXT PRIMARY KEY,
+      business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+      code TEXT NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'Aktif',
+      data_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_customers_biz ON customers(business_id);
 
     CREATE TABLE IF NOT EXISTS raw_materials (
       id TEXT PRIMARY KEY,
@@ -362,19 +377,24 @@ function ensurePlatformAndPlansSeeded() {
     `).run('platform', platformData.name, platformData.code, platformData.industry, 'BUSINESS', 'SAAS', 'active', 'IDR', now, JSON.stringify(platformData));
   }
 
-  // 2. Ensure Super Admin user exists
-  const superAdminUser = db.prepare('SELECT id FROM users WHERE email = ?').get('superadmin@hppsaas.com');
+  // 2. Ensure Super Admin user exists (Credentials configurable via environment variables)
+  const superAdminEmail = (process.env.SUPERADMIN_EMAIL || 'superadmin@hppsaas.com').trim().toLowerCase();
+  const superAdminUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').get(superAdminEmail);
   if (!superAdminUser) {
+    const defaultDevPwd = process.env.NODE_ENV === 'production'
+      ? crypto.randomBytes(16).toString('hex')
+      : 'SuperAdmin123!';
+    const superAdminPassword = process.env.SUPERADMIN_PASSWORD || defaultDevPwd;
     const salt = generateSaltServer();
-    const pwdHash = hashPasswordServer('SuperAdmin123!', salt);
+    const pwdHash = hashPasswordServer(superAdminPassword, salt);
     const now = new Date().toISOString();
     const userObj = {
       id: 'usr_superadmin',
       businessId: 'platform',
       tenantId: 'platform',
       name: 'Platform Super Admin',
-      username: 'superadmin',
-      email: 'superadmin@hppsaas.com',
+      username: superAdminEmail.split('@')[0],
+      email: superAdminEmail,
       role: 'SUPER_ADMIN',
       avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
       phone: '0811-0000-9999',
@@ -386,7 +406,7 @@ function ensurePlatformAndPlansSeeded() {
       INSERT INTO users (id, business_id, name, username, email, password_hash, salt, role, active, last_login, created_at, data_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run('usr_superadmin', 'platform', userObj.name, userObj.username, userObj.email, pwdHash, salt, 'SUPER_ADMIN', 1, userObj.lastLogin, now, JSON.stringify(userObj));
-    console.log('[Database] Seeded Platform Super Admin account: superadmin@hppsaas.com (Pass: SuperAdmin123!)');
+    console.log(`[Database] Seeded Platform Super Admin account for email: ${superAdminEmail}`);
   }
 
   // 3. Ensure SaaS Plans exist

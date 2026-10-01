@@ -27,12 +27,9 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({ isOpen
     setMessage(null);
     try {
       const res = await api.forgotPassword(email.trim());
-      if (res.token) {
-        setToken(res.token);
-      }
       setMessage({
         type: 'success',
-        text: 'Token pemulihan kata sandi telah diterbitkan.',
+        text: res.message || 'Petunjuk pemulihan kata sandi telah dikirim. Silakan masukkan token pemulihan Anda di bawah ini.',
       });
       setStep('RESET');
     } catch (err: any) {

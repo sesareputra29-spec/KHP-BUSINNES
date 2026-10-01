@@ -27,11 +27,13 @@ import {
   BookOpen,
   LogOut,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   Tag,
   DollarSign,
   Building,
   Zap,
+  Compass,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -52,6 +54,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
     currentTenant,
     openUpgradeModal,
     setIsOnboardingOpen,
+    setIsTourOpen,
   } = useApp();
 
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
@@ -63,8 +66,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
     sec6: true,
     sec7: true,
     sec8: false,
-    sec84: false,
   });
+
+  const [isSubscriptionCardCollapsed, setIsSubscriptionCardCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('sidebar_sub_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleSubscriptionCollapse = () => {
+    setIsSubscriptionCardCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('sidebar_sub_collapsed', String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
 
   const toggleSection = (sec: string) => {
     setExpandedSections((prev) => ({ ...prev, [sec]: !prev[sec] }));
@@ -99,7 +121,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
       </div>
 
       {/* Navigation Scrollable Area */}
-      <nav className="flex-1 overflow-y-auto p-3 space-y-3 text-xs font-medium">
+      <nav data-tour="sidebar-nav" className="flex-1 overflow-y-auto p-3 space-y-3 text-xs font-medium">
         {/* ================= UTAMA ================= */}
         <div>
           <button
@@ -452,78 +474,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
                 <span className="truncate">Role & Hak Akses</span>
               </button>
 
-              {/* Pengaturan Nested Accordion */}
-              <div>
-                <button
-                  onClick={() => toggleSection('sec84')}
-                  className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg hover:bg-slate-50 text-slate-600 hover:text-slate-900 transition-colors"
-                >
-                  <div className="flex items-center gap-2.5 truncate">
-                    <Settings className="w-3.5 h-3.5 shrink-0 text-slate-500" />
-                    <span className="truncate font-semibold">Pengaturan</span>
-                  </div>
-                  {expandedSections.sec84 ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                </button>
-
-                {expandedSections.sec84 && (
-                  <div className="pl-5 pr-1 py-1 space-y-0.5 border-l border-slate-200 ml-4 mt-0.5">
-                    <button
-                      onClick={() => handleMenuClick('8.4.1')}
-                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
-                        currentMenu === '8.4.1' ? 'bg-slate-100 text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                      }`}
-                    >
-                      <Tag className="w-3 h-3 shrink-0" />
-                      <span className="truncate">Kategori Produk</span>
-                    </button>
-                    <button
-                      onClick={() => handleMenuClick('8.4.2')}
-                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
-                        currentMenu === '8.4.2' ? 'bg-slate-100 text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                      }`}
-                    >
-                      <Tag className="w-3 h-3 shrink-0" />
-                      <span className="truncate">Kategori Bahan Baku</span>
-                    </button>
-                    <button
-                      onClick={() => handleMenuClick('8.4.3')}
-                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
-                        currentMenu === '8.4.3' ? 'bg-slate-100 text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                      }`}
-                    >
-                      <Scale className="w-3 h-3 shrink-0" />
-                      <span className="truncate">Satuan Ukuran</span>
-                    </button>
-                    <button
-                      onClick={() => handleMenuClick('8.4.4')}
-                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
-                        currentMenu === '8.4.4' ? 'bg-slate-100 text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                      }`}
-                    >
-                      <Calculator className="w-3 h-3 shrink-0" />
-                      <span className="truncate">Pengaturan HPP</span>
-                    </button>
-                    <button
-                      onClick={() => handleMenuClick('8.4.5')}
-                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
-                        currentMenu === '8.4.5' ? 'bg-slate-100 text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                      }`}
-                    >
-                      <DollarSign className="w-3 h-3 shrink-0" />
-                      <span className="truncate">Pengaturan Biaya</span>
-                    </button>
-                    <button
-                      onClick={() => handleMenuClick('8.4.6')}
-                      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] transition-colors ${
-                        currentMenu === '8.4.6' ? 'bg-slate-100 text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                      }`}
-                    >
-                      <Building className="w-3 h-3 shrink-0" />
-                      <span className="truncate">Pengaturan Perusahaan</span>
-                    </button>
-                  </div>
-                )}
-              </div>
+              {/* Menu Pengaturan Tunggal (Sub-menu dipindahkan ke halaman pengaturan) */}
+              <button
+                onClick={() => handleMenuClick('8.4.1')}
+                className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg transition-all ${
+                  currentMenu.startsWith('8.4') ? 'border-l-4 border-slate-950 bg-slate-100/90 text-slate-950 font-bold' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <Settings className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Pengaturan</span>
+              </button>
 
               <button
                 onClick={() => handleMenuClick('8.5')}
@@ -605,87 +565,151 @@ export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
           const dateEndStr = activeSubscription?.endDate || activeSubscription?.trialEnd;
           const formattedEnd = dateEndStr ? new Date(dateEndStr).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : '31 Des 2026';
 
-          return (
-            <div className={`border rounded-2xl p-3 space-y-2.5 relative transition-all ${
-              subStatus === 'EXPIRED'
-                ? 'bg-rose-50/70 border-rose-200'
-                : subStatus === 'TRIAL'
-                ? 'bg-amber-50/70 border-amber-200'
-                : 'bg-slate-50 border-slate-200/90'
-            }`}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-6 h-6 rounded-lg bg-slate-950 text-white flex items-center justify-center shadow-xs">
-                    <Zap className="w-3 h-3 fill-white text-white" />
-                  </div>
-                  <span className="text-[11px] font-bold text-slate-800">Paket: {planCode}</span>
-                </div>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                  subStatus === 'ACTIVE'
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : subStatus === 'TRIAL'
-                    ? 'bg-amber-100 text-amber-800'
-                    : 'bg-rose-100 text-rose-800'
-                }`}>
-                  {subStatus === 'ACTIVE' ? 'Aktif' : subStatus === 'TRIAL' ? 'Masa Trial' : 'Expired'}
-                </span>
-              </div>
-
-              <div className="space-y-1 text-[11px]">
-                <div className="flex justify-between text-slate-500">
-                  <span>Berakhir:</span>
-                  <span className="font-semibold text-slate-800">{formattedEnd}</span>
-                </div>
-                <div className="flex justify-between text-slate-500">
-                  <span>Penggunaan User:</span>
-                  <span className={`font-semibold ${userRatio >= 0.8 ? 'text-amber-600 font-bold' : 'text-slate-800'}`}>
-                    {currentUsers} / {maxUsers} User
-                  </span>
-                </div>
-              </div>
-
-              {/* Quota warning if approaching 80% */}
-              {isWarning && subStatus !== 'EXPIRED' && (
-                <div className="text-[10px] bg-amber-100/80 text-amber-800 p-1.5 rounded-lg font-medium border border-amber-200 leading-tight">
-                  ⚠️ Penggunaan Anda telah mencapai {Math.round(Math.max(userRatio, currentProducts / maxProducts) * 100)}% dari batas paket.
-                </div>
-              )}
-
-              <div className="flex flex-col gap-1.5">
+          if (isSubscriptionCardCollapsed) {
+            return (
+              <div className="space-y-1.5 animate-in fade-in slide-in-from-bottom-2 duration-200">
                 <button
-                  onClick={() => openUpgradeModal('PRO')}
-                  className="w-full py-1.5 bg-slate-950 hover:bg-slate-800 text-white font-bold text-[11px] rounded-xl shadow-xs transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer"
+                  onClick={toggleSubscriptionCollapse}
+                  className="w-full flex items-center justify-between p-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200/90 transition-all text-left cursor-pointer group shadow-2xs"
+                  title="Tampilkan kartu informasi paket & langganan"
                 >
-                  <Zap className="w-3 h-3 text-amber-400 fill-amber-400" />
-                  <span>Tingkatkan ke PRO</span>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <div className="w-5 h-5 rounded-md bg-slate-950 text-white flex items-center justify-center shadow-2xs shrink-0">
+                      <Zap className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
+                    </div>
+                    <span className="text-[11px] font-bold text-slate-800 truncate">
+                      {planCode}
+                    </span>
+                    <span
+                      className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full ${
+                        subStatus === 'ACTIVE'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : subStatus === 'TRIAL'
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-rose-100 text-rose-800'
+                      }`}
+                    >
+                      {subStatus === 'ACTIVE' ? 'Aktif' : subStatus === 'TRIAL' ? 'Trial' : 'Expired'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1 shrink-0 text-slate-400 group-hover:text-slate-800 transition-colors">
+                    <span className="text-[10px] font-semibold text-slate-500">Tampilkan</span>
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  </div>
                 </button>
-                <div className="grid grid-cols-2 gap-1.5">
+
+                <div className="px-1 flex items-center justify-between text-[10px] font-mono text-slate-400">
+                  <span className="truncate max-w-[110px]">{currentTenant.name}</span>
+                  <span>{products.length}/{maxProducts} SKU</span>
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div className="space-y-2 animate-in fade-in duration-200">
+              <div className={`border rounded-2xl p-3 space-y-2.5 relative transition-all ${
+                subStatus === 'EXPIRED'
+                  ? 'bg-rose-50/70 border-rose-200'
+                  : subStatus === 'TRIAL'
+                  ? 'bg-amber-50/70 border-amber-200'
+                  : 'bg-slate-50 border-slate-200/90'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-6 h-6 rounded-lg bg-slate-950 text-white flex items-center justify-center shadow-xs">
+                      <Zap className="w-3 h-3 fill-white text-white" />
+                    </div>
+                    <span className="text-[11px] font-bold text-slate-800">Paket: {planCode}</span>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      subStatus === 'ACTIVE'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : subStatus === 'TRIAL'
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-rose-100 text-rose-800'
+                    }`}>
+                      {subStatus === 'ACTIVE' ? 'Aktif' : subStatus === 'TRIAL' ? 'Masa Trial' : 'Expired'}
+                    </span>
+                    <button
+                      onClick={toggleSubscriptionCollapse}
+                      className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 rounded-md transition-all cursor-pointer"
+                      title="Sembunyikan kartu ke bawah"
+                    >
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1 text-[11px]">
+                  <div className="flex justify-between text-slate-500">
+                    <span>Berakhir:</span>
+                    <span className="font-semibold text-slate-800">{formattedEnd}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-500">
+                    <span>Penggunaan User:</span>
+                    <span className={`font-semibold ${userRatio >= 0.8 ? 'text-amber-600 font-bold' : 'text-slate-800'}`}>
+                      {currentUsers} / {maxUsers} User
+                    </span>
+                  </div>
+                </div>
+
+                {/* Quota warning if approaching 80% */}
+                {isWarning && subStatus !== 'EXPIRED' && (
+                  <div className="text-[10px] bg-amber-100/80 text-amber-800 p-1.5 rounded-lg font-medium border border-amber-200 leading-tight">
+                    ⚠️ Penggunaan Anda telah mencapai {Math.round(Math.max(userRatio, currentProducts / maxProducts) * 100)}% dari batas paket.
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-1.5">
                   <button
-                    onClick={() => handleMenuClick('8.4.6')}
-                    className="py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-[10px] rounded-lg transition-all text-center truncate cursor-pointer"
+                    onClick={() => openUpgradeModal('PRO')}
+                    className="w-full py-1.5 bg-slate-950 hover:bg-slate-800 text-white font-bold text-[11px] rounded-xl shadow-xs transition-all text-center flex items-center justify-center gap-1.5 cursor-pointer"
                   >
-                    Detail Paket
+                    <Zap className="w-3 h-3 text-amber-400 fill-amber-400" />
+                    <span>Tingkatkan ke PRO</span>
                   </button>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      onClick={() => handleMenuClick('8.4.6')}
+                      className="py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-[10px] rounded-lg transition-all text-center truncate cursor-pointer"
+                    >
+                      Detail Paket
+                    </button>
+                    <button
+                      onClick={() => setIsOnboardingOpen(true)}
+                      className="py-1 bg-slate-100 hover:bg-slate-200 text-indigo-700 font-semibold text-[10px] rounded-lg transition-all text-center truncate cursor-pointer"
+                    >
+                      Panduan Setup
+                    </button>
+                  </div>
                   <button
-                    onClick={() => setIsOnboardingOpen(true)}
-                    className="py-1 bg-slate-100 hover:bg-slate-200 text-indigo-700 font-semibold text-[10px] rounded-lg transition-all text-center truncate cursor-pointer"
+                    onClick={() => {
+                      handleMenuClick('1.1');
+                      setIsTourOpen(true);
+                    }}
+                    className="w-full py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-[10px] rounded-lg transition-all text-center flex items-center justify-center gap-1 cursor-pointer"
                   >
-                    Panduan Setup
+                    <Compass className="w-3 h-3 text-lime-600" />
+                    <span>Mulai Tur Fitur Dashboard</span>
                   </button>
                 </div>
+              </div>
+
+              <div className="px-1 flex items-center justify-between text-xs text-slate-400">
+                <span className="text-[10px] text-slate-500 font-mono truncate max-w-[120px]">
+                  {currentTenant.name}
+                </span>
+                <span className="text-[10px] font-mono text-slate-500">
+                  {products.length} / {maxProducts} SKU
+                </span>
               </div>
             </div>
           );
         })()}
-
-        <div className="mt-2 px-1 flex items-center justify-between text-xs text-slate-400">
-          <span className="text-[10px] text-slate-500 font-mono truncate max-w-[120px]">
-            {currentTenant.name}
-          </span>
-          <span className="text-[10px] font-mono text-slate-500">
-            {products.length} / {activeSubscription?.limits?.maxProducts || 100} SKU
-          </span>
-        </div>
       </div>
     </aside>
   );

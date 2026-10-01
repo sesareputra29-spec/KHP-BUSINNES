@@ -45,6 +45,7 @@ const searchableMenuItems: SearchItem[] = [
   { id: '8.1', title: 'Profil Pengguna', category: 'SISTEM', keywords: 'akun foto profil nama email password', icon: <Settings className="w-4 h-4" /> },
   { id: '8.2', title: 'Manajemen Pengguna', category: 'SISTEM', keywords: 'tambah user akun karyawan tim role', icon: <Settings className="w-4 h-4" /> },
   { id: '8.3', title: 'Role & Hak Akses', category: 'SISTEM', keywords: 'permission matrix wewenang staf akuntan', icon: <Settings className="w-4 h-4" /> },
+  { id: '8.4', title: 'Pengaturan Sistem', category: 'SISTEM', keywords: 'pengaturan konfigurasi master parameter hpp biaya perusahaan kategori satuan', icon: <Settings className="w-4 h-4" /> },
   { id: '8.4.1', title: 'Kategori Produk', category: 'SISTEM / PENGATURAN', keywords: 'kelompok produk bakery snack minuman', icon: <Settings className="w-4 h-4" /> },
   { id: '8.4.2', title: 'Kategori Bahan Baku', category: 'SISTEM / PENGATURAN', keywords: 'kategori tepung rempah bumbu kemasan', icon: <Settings className="w-4 h-4" /> },
   { id: '8.4.3', title: 'Satuan Ukuran & Konversi', category: 'SISTEM / PENGATURAN', keywords: 'unit of measure kg gr liter ml pcs rasio', icon: <Settings className="w-4 h-4" /> },
