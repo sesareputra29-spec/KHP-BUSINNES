@@ -102,6 +102,7 @@ export function initDatabase() {
       data_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_categories_biz ON categories(business_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_categories_biz_code ON categories(business_id, code, type);
 
     CREATE TABLE IF NOT EXISTS units (
       id TEXT PRIMARY KEY,
@@ -111,6 +112,7 @@ export function initDatabase() {
       data_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_units_biz ON units(business_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_units_biz_code ON units(business_id, code);
 
     CREATE TABLE IF NOT EXISTS suppliers (
       id TEXT PRIMARY KEY,
@@ -121,6 +123,7 @@ export function initDatabase() {
       data_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_suppliers_biz ON suppliers(business_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_suppliers_biz_code ON suppliers(business_id, code);
 
     CREATE TABLE IF NOT EXISTS customers (
       id TEXT PRIMARY KEY,
@@ -131,6 +134,7 @@ export function initDatabase() {
       data_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_customers_biz ON customers(business_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_biz_code ON customers(business_id, code);
 
     CREATE TABLE IF NOT EXISTS raw_materials (
       id TEXT PRIMARY KEY,
@@ -142,6 +146,7 @@ export function initDatabase() {
       data_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_raw_materials_biz ON raw_materials(business_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_materials_biz_code ON raw_materials(business_id, code);
 
     CREATE TABLE IF NOT EXISTS products (
       id TEXT PRIMARY KEY,
@@ -153,6 +158,7 @@ export function initDatabase() {
       data_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_products_biz ON products(business_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_products_biz_sku ON products(business_id, sku);
 
     CREATE TABLE IF NOT EXISTS boms (
       id TEXT PRIMARY KEY,
@@ -163,6 +169,7 @@ export function initDatabase() {
       data_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_boms_biz ON boms(business_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_boms_biz_code ON boms(business_id, code);
 
     CREATE TABLE IF NOT EXISTS production_batches (
       id TEXT PRIMARY KEY,
@@ -175,6 +182,7 @@ export function initDatabase() {
       data_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_batches_biz ON production_batches(business_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_batches_biz_num ON production_batches(business_id, batch_number);
 
     CREATE TABLE IF NOT EXISTS purchase_orders (
       id TEXT PRIMARY KEY,
@@ -186,6 +194,7 @@ export function initDatabase() {
       data_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_po_biz ON purchase_orders(business_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_po_biz_num ON purchase_orders(business_id, po_number);
 
     CREATE TABLE IF NOT EXISTS stock_movements (
       id TEXT PRIMARY KEY,

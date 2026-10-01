@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS categories (
   data_json JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_categories_biz ON categories(business_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_categories_biz_code ON categories(business_id, code, type);
 
 -- 5. Units (UOM)
 CREATE TABLE IF NOT EXISTS units (
@@ -74,6 +75,7 @@ CREATE TABLE IF NOT EXISTS units (
   data_json JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_units_biz ON units(business_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_units_biz_code ON units(business_id, code);
 
 -- 6. Suppliers
 CREATE TABLE IF NOT EXISTS suppliers (
@@ -85,6 +87,7 @@ CREATE TABLE IF NOT EXISTS suppliers (
   data_json JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_suppliers_biz ON suppliers(business_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_suppliers_biz_code ON suppliers(business_id, code);
 
 -- 6B. Customers (Pelanggan)
 CREATE TABLE IF NOT EXISTS customers (
@@ -96,6 +99,7 @@ CREATE TABLE IF NOT EXISTS customers (
   data_json JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_customers_biz ON customers(business_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_biz_code ON customers(business_id, code);
 
 -- 7. Raw Materials
 CREATE TABLE IF NOT EXISTS raw_materials (
@@ -108,6 +112,7 @@ CREATE TABLE IF NOT EXISTS raw_materials (
   data_json JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_raw_materials_biz ON raw_materials(business_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_materials_biz_code ON raw_materials(business_id, code);
 
 -- 8. Products
 CREATE TABLE IF NOT EXISTS products (
@@ -120,6 +125,7 @@ CREATE TABLE IF NOT EXISTS products (
   data_json JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_products_biz ON products(business_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_products_biz_sku ON products(business_id, sku);
 
 -- 9. Bill of Materials (BOM / Recipe)
 CREATE TABLE IF NOT EXISTS boms (
@@ -131,6 +137,7 @@ CREATE TABLE IF NOT EXISTS boms (
   data_json JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_boms_biz ON boms(business_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_boms_biz_code ON boms(business_id, code);
 
 -- 10. Production Batches (SPK Produksi)
 CREATE TABLE IF NOT EXISTS production_batches (
@@ -144,6 +151,7 @@ CREATE TABLE IF NOT EXISTS production_batches (
   data_json JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_batches_biz ON production_batches(business_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_batches_biz_num ON production_batches(business_id, batch_number);
 
 -- 11. Purchase Orders (PO)
 CREATE TABLE IF NOT EXISTS purchase_orders (
@@ -156,6 +164,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   data_json JSONB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_po_biz ON purchase_orders(business_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_po_biz_num ON purchase_orders(business_id, po_number);
 
 -- 12. Stock Movements
 CREATE TABLE IF NOT EXISTS stock_movements (

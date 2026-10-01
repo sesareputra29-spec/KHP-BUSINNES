@@ -374,28 +374,29 @@ export function requireRole(allowedRoles: Array<UserProfile['role']>, action: Rb
 
     const role = req.auth.userRole;
 
-    // SUPER_ADMIN, Administrator, & Manager/Owner have full access
-    if (role === 'SUPER_ADMIN' || role === 'Administrator' || role === 'Manager / Owner') {
+    // Platform Super Admin has oversight
+    if (role === 'SUPER_ADMIN') {
       return next();
     }
 
-    // Viewer can only perform 'view' and 'export' actions
-    if (role === 'Viewer' && action !== 'view' && action !== 'export') {
-      return res.status(403).json({
-        error: 'Forbidden',
-        message: 'Akses ditolak: Akun Viewer hanya memiliki hak baca (view-only).',
-      });
-    }
-
+    // Role-Based Access Validation against allowedRoles matrix
     if (!allowedRoles.includes(role)) {
       return res.status(403).json({
         error: 'Forbidden',
-        message: `Akses ditolak: Peran '${role}' tidak diizinkan mengakses modul ini.`,
+        message: `Akses ditolak: Peran '${role}' tidak memiliki hak akses untuk modul atau tindakan ini.`,
+      });
+    }
+
+    // Viewer role can strictly only perform 'view' or 'export' actions
+    if (role === 'Viewer' && action !== 'view' && action !== 'export') {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Akses ditolak: Akun Viewer hanya memiliki izin baca (view-only).',
       });
     }
 
     // Disallow delete for non-administrators
-    if (action === 'delete' && (role as string) !== 'Administrator' && (role as string) !== 'Manager / Owner') {
+    if (action === 'delete' && role !== 'Administrator' && role !== 'Manager / Owner') {
       return res.status(403).json({
         error: 'Forbidden',
         message: `Akses ditolak: Peran '${role}' tidak memiliki izin untuk menghapus data.`,

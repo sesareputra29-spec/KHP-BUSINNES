@@ -10,6 +10,7 @@ import {
   enforceSubscriptionAccess,
   requireFeature,
 } from './auth';
+import { auditDatabaseIntegrity, generatePostgreSqlMigrationScript } from './database-migrator';
 import crypto from 'node:crypto';
 import { mockTenants } from '../data/mockData';
 import { FeatureKey } from '../types';
@@ -504,7 +505,7 @@ apiRouter.get('/business/all', authenticate, (req: Request, res: Response) => {
 // 3. USERS MANAGEMENT (SCOPED TO BUSINESS)
 // ==========================================
 
-apiRouter.get('/users', authenticate, (req: Request, res: Response) => {
+apiRouter.get('/users', authenticate, requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant'], 'view'), (req: Request, res: Response) => {
   const rows = db.prepare('SELECT data_json FROM users WHERE business_id = ? ORDER BY created_at ASC').all(req.businessId!) as any[];
   const users = rows.map((r) => JSON.parse(r.data_json));
   return res.json(users);
@@ -968,7 +969,7 @@ apiRouter.delete('/units/:id', authenticate, requireRole(['Administrator', 'Mana
 // 8. BILL OF MATERIALS (BOM / RESEP)
 // ==========================================
 
-apiRouter.get('/boms', authenticate, (req: Request, res: Response) => {
+apiRouter.get('/boms', authenticate, requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant', 'Staff', 'Viewer'], 'view'), (req: Request, res: Response) => {
   const rows = db.prepare('SELECT data_json FROM boms WHERE business_id = ?').all(req.businessId!) as any[];
   return res.json(rows.map((r) => JSON.parse(r.data_json)));
 });
@@ -1154,7 +1155,7 @@ apiRouter.post('/inventory/movements', authenticate, requireRole(['Administrator
 // 11. ACTIVITY LOGS & COMPANY SETTINGS
 // ==========================================
 
-apiRouter.get('/activity-logs', authenticate, (req: Request, res: Response) => {
+apiRouter.get('/activity-logs', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'view'), (req: Request, res: Response) => {
   const rows = db.prepare('SELECT data_json FROM activity_logs WHERE business_id = ?').all(req.businessId!) as any[];
   const logs = rows.map((r) => JSON.parse(r.data_json));
   logs.sort((a: any, b: any) => (b.timestamp || '').localeCompare(a.timestamp || ''));
@@ -1226,6 +1227,22 @@ apiRouter.get('/system/export-json', authenticate, requireRole(['Administrator',
   logAudit(bId, req.auth!.userId, req.auth!.userName, 'Ekspor Database', 'Sistem', 'Mengekspor seluruh arsip basis data bisnis ke format JSON.');
 
   return res.json(exportPayload);
+});
+
+apiRouter.get('/system/db-audit', authenticate, requireRole(['Administrator'], 'view'), (req: Request, res: Response) => {
+  const auditResult = auditDatabaseIntegrity();
+  return res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    audit: auditResult,
+  });
+});
+
+apiRouter.get('/system/postgres-migration-sql', authenticate, requireRole(['Administrator'], 'export'), (req: Request, res: Response) => {
+  const sqlDump = generatePostgreSqlMigrationScript();
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="hpp_saas_postgres_migration.sql"');
+  return res.send(sqlDump);
 });
 
 apiRouter.post('/system/import-json', authenticate, requireRole(['Administrator'], 'create'), (req: Request, res: Response) => {
@@ -1917,7 +1934,7 @@ apiRouter.post('/users/invite', authenticate, enforceSubscriptionAccess, require
   }
 });
 
-apiRouter.get('/users/invitations', authenticate, (req: Request, res: Response) => {
+apiRouter.get('/users/invitations', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'view'), (req: Request, res: Response) => {
   const rows = db.prepare('SELECT * FROM invitations WHERE business_id = ? ORDER BY created_at DESC').all(req.businessId!) as any[];
   return res.json(rows);
 });
@@ -1930,7 +1947,7 @@ apiRouter.delete('/users/invitations/:id', authenticate, requireRole(['Administr
 });
 
 // Feature entitlement test endpoint for ADVANCED_REPORT
-apiRouter.get('/analysis/advanced-profitability', authenticate, enforceSubscriptionAccess, requireFeature('ADVANCED_REPORT'), (req: Request, res: Response) => {
+apiRouter.get('/analysis/advanced-profitability', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant'], 'view'), requireFeature('ADVANCED_REPORT'), (req: Request, res: Response) => {
   return res.json({
     status: 'ok',
     message: 'Akses fitur Analisis Profitabilitas Lanjutan & BEP Multivariat berhasil diotorisasi oleh backend.',
@@ -1944,7 +1961,7 @@ apiRouter.get('/analysis/advanced-profitability', authenticate, enforceSubscript
 // ============================================================================
 
 // Create / Setup Business Profile in Onboarding (Requirement 10 & 11)
-apiRouter.post('/onboarding/create-business', authenticate, (req: Request, res: Response) => {
+apiRouter.post('/onboarding/create-business', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'edit'), (req: Request, res: Response) => {
   try {
     const { name, ownerName, businessType = 'F&B / Kuliner', phone = '', address = '' } = req.body;
 
@@ -2299,7 +2316,7 @@ apiRouter.post('/onboarding/seed-sample-data', authenticate, (req: Request, res:
 // ============================================================================
 
 // Simulated Subscription Checkout / Upgrade Plan (Requirement 2, 7, 23)
-apiRouter.post('/billing/checkout', authenticate, (req: Request, res: Response) => {
+apiRouter.post('/billing/checkout', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'create'), (req: Request, res: Response) => {
   try {
     const { planCode = 'PRO', billingCycle = 'MONTHLY', paymentMethod = 'QRIS' } = req.body;
 
@@ -2422,7 +2439,7 @@ apiRouter.post('/billing/checkout', authenticate, (req: Request, res: Response) 
 });
 
 // Get Invoices History (Requirement 2 & Customer Journey)
-apiRouter.get('/billing/invoices', authenticate, (req: Request, res: Response) => {
+apiRouter.get('/billing/invoices', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'view'), (req: Request, res: Response) => {
   try {
     const rows = db.prepare(`
       SELECT *
