@@ -18,6 +18,12 @@ import { emailService } from './email/email-service';
 import { backupService } from './backup/backup-service';
 import { logSecurityAudit, logBusinessActivity } from './audit';
 import { recordError, getRecentErrors } from './error-handler';
+import {
+  requireCronSecret,
+  runSubscriptionLifecycleJob,
+  runRetentionCleanupJob,
+  runAutomatedBackupJob,
+} from './cron/cron-handler';
 import crypto from 'node:crypto';
 import { mockTenants } from '../data/mockData';
 import { FeatureKey } from '../types';
@@ -3269,4 +3275,57 @@ apiRouter.get('/system/disaster-recovery', authenticate, requireRole(['Administr
     return res.status(500).json({ error: 'ServerError', errorId: rec.errorId, message: 'Gagal mengambil metrik Disaster Recovery.' });
   }
 });
+
+// ============================================================================
+// 17. VERCEL CRON & SCHEDULED BACKGROUND JOBS (PROMPT 14)
+// ============================================================================
+
+// 1. Cron Job: Subscription & Trial Expiry Lifecycle (Daily 01:00 UTC)
+apiRouter.all(['/cron/subscription-lifecycle', '/cron/subscriptions'], requireCronSecret, async (req: Request, res: Response) => {
+  try {
+    const result = await runSubscriptionLifecycleJob();
+    return res.json({
+      success: true,
+      job: 'subscription-lifecycle',
+      timestamp: new Date().toISOString(),
+      ...result,
+    });
+  } catch (err: any) {
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'CronExecutionFailed', errorId: rec.errorId, message: err.message });
+  }
+});
+
+// 2. Cron Job: Ephemeral Data & Backup Retention Cleanup (Daily 02:00 UTC)
+apiRouter.all(['/cron/cleanup-retention', '/cron/cleanup'], requireCronSecret, async (req: Request, res: Response) => {
+  try {
+    const result = await runRetentionCleanupJob();
+    return res.json({
+      success: true,
+      job: 'cleanup-retention',
+      timestamp: new Date().toISOString(),
+      ...result,
+    });
+  } catch (err: any) {
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'CronExecutionFailed', errorId: rec.errorId, message: err.message });
+  }
+});
+
+// 3. Cron Job: Automated Full Platform Backup Snapshot (Daily 03:00 UTC)
+apiRouter.all(['/cron/automated-backup', '/cron/backup'], requireCronSecret, async (req: Request, res: Response) => {
+  try {
+    const result = await runAutomatedBackupJob();
+    return res.json({
+      success: true,
+      job: 'automated-backup',
+      timestamp: new Date().toISOString(),
+      ...result,
+    });
+  } catch (err: any) {
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'CronExecutionFailed', errorId: rec.errorId, message: err.message });
+  }
+});
+
 

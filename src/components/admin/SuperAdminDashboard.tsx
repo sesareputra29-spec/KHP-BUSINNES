@@ -1015,21 +1015,80 @@ export const SuperAdminDashboard: React.FC = () => {
               </div>
             )}
 
-            {/* User List */}
+            {/* User List & Password Reset */}
             {selectedBusiness.users && (
               <div className="space-y-2">
                 <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
                   Daftar Pengguna Bisnis ({selectedBusiness.users.length})
                 </div>
-                <div className="divide-y divide-slate-800/80 bg-slate-950 border border-slate-800 rounded-xl overflow-hidden max-h-40 overflow-y-auto">
+                <div className="divide-y divide-slate-800/80 bg-slate-950 border border-slate-800 rounded-xl overflow-hidden max-h-44 overflow-y-auto">
                   {selectedBusiness.users.map((u: any) => (
-                    <div key={u.id} className="p-3 text-xs flex items-center justify-between">
+                    <div key={u.id} className="p-3 text-xs flex items-center justify-between hover:bg-slate-900/40">
                       <div>
-                        <div className="font-semibold text-white">{u.name}</div>
-                        <div className="text-slate-400">{u.email}</div>
+                        <div className="font-semibold text-white flex items-center gap-2">
+                          <span>{u.name}</span>
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-400 border border-slate-800">
+                            {u.role}
+                          </span>
+                        </div>
+                        <div className="text-slate-400 text-[11px]">{u.email}</div>
                       </div>
-                      <span className="px-2 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-800">
-                        {u.role}
+                      <button
+                        onClick={() => handleResetUserPassword(u.id, u.name)}
+                        className="flex items-center gap-1 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded border border-slate-700 text-[11px] transition"
+                        title="Reset Password Akun"
+                      >
+                        <KeyRound className="w-3 h-3 text-amber-400" />
+                        <span>Reset Sandi</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Invoices & Payment History */}
+            {selectedBusiness.invoices && selectedBusiness.invoices.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                  Riwayat Tagihan & Pembayaran ({selectedBusiness.invoices.length})
+                </div>
+                <div className="divide-y divide-slate-800/80 bg-slate-950 border border-slate-800 rounded-xl overflow-hidden max-h-36 overflow-y-auto">
+                  {selectedBusiness.invoices.map((inv: any) => (
+                    <div key={inv.id} className="p-2.5 px-3 text-xs flex items-center justify-between">
+                      <div>
+                        <span className="font-mono font-medium text-slate-200">{inv.invoiceNumber}</span>
+                        <span className="text-slate-500 ml-2">({inv.planName})</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="font-semibold text-white">Rp {Number(inv.amount).toLocaleString('id-ID')}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                          inv.status === 'PAID' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'
+                        }`}>
+                          {inv.status}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Last Activity Section */}
+            {selectedBusiness.recentActivities && selectedBusiness.recentActivities.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                  Aktivitas Terakhir Tenant
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
+                  {selectedBusiness.recentActivities.slice(0, 3).map((act: any, idx: number) => (
+                    <div key={act.id || idx} className="text-xs flex items-start justify-between border-b border-slate-900 pb-1.5 last:border-0 last:pb-0">
+                      <div>
+                        <span className="font-semibold text-slate-200">{act.action || act.type}</span>
+                        <p className="text-slate-400 text-[11px] mt-0.5">{act.details || act.module}</p>
+                      </div>
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        {(act.timestamp || '').replace('T', ' ').substring(0, 16)}
                       </span>
                     </div>
                   ))}
@@ -1037,7 +1096,15 @@ export const SuperAdminDashboard: React.FC = () => {
               </div>
             )}
 
-            <div className="pt-2 flex justify-end">
+            {/* Danger Zone: Safe Archiving */}
+            <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+              <button
+                onClick={() => handleArchiveBusiness(selectedBusiness.business.id, selectedBusiness.business.name)}
+                className="px-3 py-1.5 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/50 rounded-xl text-xs font-medium transition"
+              >
+                Arsipkan Bisnis Ini
+              </button>
+
               <button
                 onClick={() => setIsDetailsModalOpen(false)}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl transition"

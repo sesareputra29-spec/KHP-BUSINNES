@@ -30,5 +30,19 @@
         }
       ]
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/subscription-lifecycle",
+      "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/cron/cleanup-retention",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/automated-backup",
+      "schedule": "0 3 * * *"
+    }
   ]
 }
