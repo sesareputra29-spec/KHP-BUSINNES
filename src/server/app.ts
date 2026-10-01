@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { initDatabase } from './db';
 import { apiRouter } from './routes';
+import { centralizedErrorHandler } from './error-handler';
 
 // Ensure database tables and initial seed data are initialized
 initDatabase();
@@ -58,13 +59,7 @@ app.get('/api/health', (req: Request, res: Response) => {
 // 5. Mount backend API routes under /api
 app.use('/api', apiRouter);
 
-// 6. Global API error handler (returns structured JSON instead of HTML stack traces)
-app.use('/api', (err: any, req: Request, res: Response, next: NextFunction) => {
-  console.error('[API Error]', err);
-  res.status(err.status || 500).json({
-    error: err.name || 'InternalServerError',
-    message: err.message || 'Terjadi kesalahan pada server.',
-  });
-});
+// 6. Global Centralized API Error Handler (persists incident log and hides secrets/stack traces)
+app.use(centralizedErrorHandler);
 
 export default app;

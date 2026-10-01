@@ -280,3 +280,85 @@ CREATE TABLE IF NOT EXISTS invoices (
   data_json JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_invoices_biz ON invoices(business_id);
+
+-- 20. Payment Transactions
+CREATE TABLE IF NOT EXISTS payment_transactions (
+  id VARCHAR(64) PRIMARY KEY,
+  business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  invoice_id VARCHAR(64) NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  provider VARCHAR(64) NOT NULL,
+  provider_tx_id VARCHAR(128),
+  amount NUMERIC(15,2) NOT NULL,
+  currency VARCHAR(16) NOT NULL DEFAULT 'IDR',
+  payment_method VARCHAR(64) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+  payment_url TEXT,
+  qr_code_data TEXT,
+  virtual_account VARCHAR(64),
+  metadata_json JSONB,
+  paid_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_pay_tx_biz ON payment_transactions(business_id);
+CREATE INDEX IF NOT EXISTS idx_pay_tx_inv ON payment_transactions(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_pay_tx_provider ON payment_transactions(provider_tx_id);
+
+-- 21. Webhook Events (Idempotency and Audit Trail)
+CREATE TABLE IF NOT EXISTS webhook_events (
+  id VARCHAR(64) PRIMARY KEY,
+  provider VARCHAR(64) NOT NULL,
+  event_id VARCHAR(128) NOT NULL,
+  event_type VARCHAR(64) NOT NULL,
+  reference_id VARCHAR(128) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  payload_json JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_ref ON webhook_events(reference_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_webhook_event ON webhook_events(provider, event_id);
+
+-- 22. Security Audit Logs (Security & Admin Activity)
+CREATE TABLE IF NOT EXISTS security_audit_logs (
+  id VARCHAR(64) PRIMARY KEY,
+  business_id VARCHAR(64) REFERENCES businesses(id) ON DELETE CASCADE,
+  user_id VARCHAR(64),
+  user_name VARCHAR(255),
+  user_email VARCHAR(255),
+  user_role VARCHAR(64),
+  action VARCHAR(64) NOT NULL,
+  category VARCHAR(32) NOT NULL,
+  result VARCHAR(32) NOT NULL,
+  ip_address VARCHAR(45),
+  user_agent VARCHAR(255),
+  details TEXT,
+  metadata_json JSONB,
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sec_logs_biz ON security_audit_logs(business_id);
+CREATE INDEX IF NOT EXISTS idx_sec_logs_action ON security_audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_sec_logs_time ON security_audit_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_sec_logs_user ON security_audit_logs(user_id);
+
+-- 23. Centralized Error Logs
+CREATE TABLE IF NOT EXISTS error_logs (
+  id VARCHAR(64) PRIMARY KEY,
+  error_id VARCHAR(64) NOT NULL UNIQUE,
+  business_id VARCHAR(64),
+  user_id VARCHAR(64),
+  path VARCHAR(255) NOT NULL,
+  method VARCHAR(16) NOT NULL,
+  status_code INT NOT NULL,
+  error_name VARCHAR(128) NOT NULL,
+  message TEXT NOT NULL,
+  sanitized_message TEXT NOT NULL,
+  stack_trace TEXT,
+  ip_address VARCHAR(45),
+  user_agent VARCHAR(255),
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_err_logs_err_id ON error_logs(error_id);
+CREATE INDEX IF NOT EXISTS idx_err_logs_time ON error_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_err_logs_biz ON error_logs(business_id);
+
+

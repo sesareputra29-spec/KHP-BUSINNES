@@ -9,8 +9,14 @@ import {
   requireSuperAdmin,
   enforceSubscriptionAccess,
   requireFeature,
+  requireResourceLimit,
 } from './auth';
 import { auditDatabaseIntegrity, generatePostgreSqlMigrationScript } from './database-migrator';
+import { getBusinessEntitlementSummary, validatePlanChangeSafety } from './entitlements';
+import { paymentService } from './payment/payment-service';
+import { emailService } from './email/email-service';
+import { logSecurityAudit, logBusinessActivity } from './audit';
+import { recordError, getRecentErrors } from './error-handler';
 import crypto from 'node:crypto';
 import { mockTenants } from '../data/mockData';
 import { FeatureKey } from '../types';
@@ -37,15 +43,49 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
     `).get(trimmed, trimmed) as any;
 
     if (!userRow) {
+      logSecurityAudit({
+        action: 'login_failure',
+        category: 'AUTH',
+        result: 'FAILURE',
+        details: `Percobaan login gagal untuk identifier: ${trimmed}`,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'] as string,
+      });
       return res.status(401).json({ error: 'InvalidCredentials', message: 'Email/username atau kata sandi tidak cocok.' });
     }
 
     if (!userRow.active) {
+      logSecurityAudit({
+        action: 'login_failure',
+        category: 'AUTH',
+        result: 'BLOCKED',
+        businessId: userRow.business_id,
+        userId: userRow.id,
+        userName: userRow.name,
+        userEmail: userRow.email,
+        userRole: userRow.role,
+        details: 'Percobaan login ditolak karena akun telah dinonaktifkan.',
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'] as string,
+      });
       return res.status(403).json({ error: 'AccountDisabled', message: 'Akun ini telah dinonaktifkan. Hubungi administrator.' });
     }
 
     const isValid = verifyPasswordServer(password, userRow.salt, userRow.password_hash);
     if (!isValid) {
+      logSecurityAudit({
+        action: 'login_failure',
+        category: 'AUTH',
+        result: 'FAILURE',
+        businessId: userRow.business_id,
+        userId: userRow.id,
+        userName: userRow.name,
+        userEmail: userRow.email,
+        userRole: userRow.role,
+        details: 'Kata sandi tidak cocok.',
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'] as string,
+      });
       return res.status(401).json({ error: 'InvalidCredentials', message: 'Email/username atau kata sandi tidak cocok.' });
     }
 
@@ -56,7 +96,22 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
     // Create session in SQLite
     const token = createSession(userRow.id, userRow.business_id);
 
-    // Log audit
+    // Log Security Audit
+    logSecurityAudit({
+      action: 'login_success',
+      category: 'AUTH',
+      result: 'SUCCESS',
+      businessId: userRow.business_id,
+      userId: userRow.id,
+      userName: userRow.name,
+      userEmail: userRow.email,
+      userRole: userRow.role,
+      details: `Pengguna ${userRow.name} (${userRow.role}) berhasil masuk ke sistem.`,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] as string,
+    });
+
+    // Log business activity
     logAudit(
       userRow.business_id,
       userRow.id,
@@ -83,8 +138,12 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
       },
     });
   } catch (err: any) {
-    console.error('[API /auth/login] Error:', err);
-    return res.status(500).json({ error: 'ServerError', message: 'Terjadi kesalahan internal server saat login.' });
+    const rec = recordError(err, req);
+    return res.status(500).json({
+      error: 'ServerError',
+      errorId: rec.errorId,
+      message: 'Terjadi kesalahan internal server saat login. Kode insiden: ' + rec.errorId,
+    });
   }
 });
 
@@ -294,6 +353,15 @@ apiRouter.post('/auth/register', async (req: Request, res: Response) => {
       req.ip || '127.0.0.1'
     );
 
+    // Non-blocking dispatch of Email Verification
+    const verifyToken = crypto.randomBytes(24).toString('hex');
+    const verifyUrl = `${req.protocol}://${req.get('host')}/verify-email?token=${verifyToken}&email=${encodeURIComponent(cleanEmail)}`;
+    emailService.sendEmailVerification(cleanEmail, {
+      name: name.trim(),
+      verifyUrl,
+      token: verifyToken,
+    }).catch((err) => console.error('[Register] Email verification dispatch failed silently:', err));
+
     return res.status(201).json({
       success: true,
       token,
@@ -345,12 +413,33 @@ apiRouter.post('/auth/forgot-password', (req: Request, res: Response) => {
       console.log(`[Security/DevOnly] Password reset token generated for ${cleanEmail}: ${token} (expires in 15m)`);
     }
 
+    // Non-blocking email dispatch
+    const resetUrl = `${req.protocol}://${req.get('host')}/reset-password?token=${token}`;
+    emailService.sendForgotPassword(cleanEmail, {
+      name: user.name,
+      resetUrl,
+      expiresInMinutes: 15,
+    }).catch((err) => console.error('[ForgotPassword] Email dispatch failed silently:', err));
+
+    logSecurityAudit({
+      action: 'password_reset_request',
+      category: 'AUTH',
+      result: 'SUCCESS',
+      userId: user.id,
+      userName: user.name,
+      userEmail: cleanEmail,
+      details: `Permintaan token reset kata sandi diajukan untuk ${cleanEmail}.`,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] as string,
+    });
+
     return res.json({
       success: true,
       message: 'Jika alamat email terdaftar, petunjuk pemulihan kata sandi telah dikirimkan ke email Anda.',
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'ServerError', message: 'Gagal memproses permohonan reset kata sandi.' });
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'ServerError', errorId: rec.errorId, message: 'Gagal memproses permohonan reset kata sandi.' });
   }
 });
 
@@ -369,14 +458,40 @@ apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
     `).get(token) as any;
 
     if (!tokenRow) {
+      logSecurityAudit({
+        action: 'password_reset_success',
+        category: 'AUTH',
+        result: 'FAILURE',
+        details: 'Percobaan reset kata sandi dengan token tidak valid.',
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'] as string,
+      });
       return res.status(404).json({ error: 'NotFound', message: 'Token reset kata sandi tidak valid atau tidak ditemukan.' });
     }
 
     if (tokenRow.used === 1) {
+      logSecurityAudit({
+        action: 'password_reset_success',
+        category: 'AUTH',
+        result: 'BLOCKED',
+        userId: tokenRow.user_id,
+        details: 'Percobaan menggunakan kembali token reset yang sudah used (single-use violation).',
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'] as string,
+      });
       return res.status(400).json({ error: 'BadRequest', message: 'Token reset kata sandi sudah pernah digunakan (single-use).' });
     }
 
     if (new Date(tokenRow.expires_at) < new Date()) {
+      logSecurityAudit({
+        action: 'password_reset_success',
+        category: 'AUTH',
+        result: 'FAILURE',
+        userId: tokenRow.user_id,
+        details: 'Percobaan reset kata sandi dengan token kedaluwarsa.',
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'] as string,
+      });
       return res.status(400).json({ error: 'BadRequest', message: 'Token reset kata sandi telah kedaluwarsa. Silakan ajukan permohonan baru.' });
     }
 
@@ -388,18 +503,54 @@ apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
     db.prepare('UPDATE password_reset_tokens SET used = 1 WHERE id = ?').run(tokenRow.id);
     db.prepare('DELETE FROM sessions WHERE user_id = ?').run(tokenRow.user_id);
 
+    // Non-blocking password reset confirmation email
+    const userRow = db.prepare('SELECT name, email FROM users WHERE id = ?').get(tokenRow.user_id) as any;
+    if (userRow && userRow.email) {
+      emailService.sendPasswordResetSuccess(userRow.email, {
+        name: userRow.name,
+        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
+        loginUrl: `${req.protocol}://${req.get('host')}/login`,
+      }).catch((err) => console.error('[ResetPassword] Confirmation email failed silently:', err));
+    }
+
+    logSecurityAudit({
+      action: 'password_reset_success',
+      category: 'AUTH',
+      result: 'SUCCESS',
+      userId: tokenRow.user_id,
+      userName: userRow?.name,
+      userEmail: userRow?.email,
+      details: 'Kata sandi berhasil diatur ulang menggunakan token pemulihan.',
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] as string,
+    });
+
     return res.json({
       success: true,
       message: 'Kata sandi Anda berhasil diperbarui! Silakan masuk dengan kata sandi baru.',
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'ServerError', message: 'Gagal mengatur ulang kata sandi.' });
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'ServerError', errorId: rec.errorId, message: 'Gagal mengatur ulang kata sandi.' });
   }
 });
 
 apiRouter.post('/auth/logout', authenticate, (req: Request, res: Response) => {
   if (req.auth) {
     invalidateSession(req.auth.token);
+    logSecurityAudit({
+      action: 'logout',
+      category: 'AUTH',
+      result: 'SUCCESS',
+      businessId: req.auth.businessId,
+      userId: req.auth.userId,
+      userName: req.auth.userName,
+      userEmail: req.auth.userEmail,
+      userRole: req.auth.userRole,
+      details: 'Pengguna berhasil keluar dari aplikasi.',
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] as string,
+    });
     logAudit(req.auth.businessId, req.auth.userId, req.auth.userName, 'Logout', 'Autentikasi', 'Pengguna keluar dari sistem.');
   }
   return res.json({ success: true, message: 'Berhasil keluar.' });
@@ -446,6 +597,18 @@ apiRouter.post('/auth/switch-tenant', authenticate, (req: Request, res: Response
   }
 
   if (!targetUserRow) {
+    logSecurityAudit({
+      action: 'business_switch',
+      category: 'TENANT',
+      result: 'BLOCKED',
+      businessId: targetBusinessId,
+      userId: req.auth!.userId,
+      userName: req.auth!.userName,
+      userEmail: req.auth!.userEmail,
+      details: `Percobaan beralih ke bisnis tidak sah: ${targetBusinessId}`,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] as string,
+    });
     return res.status(403).json({
       error: 'Forbidden',
       message: 'Akses ditolak: Anda tidak memiliki akun aktif pada bisnis target.',
@@ -455,6 +618,20 @@ apiRouter.post('/auth/switch-tenant', authenticate, (req: Request, res: Response
   // Invalidate old session, create new session for target business
   invalidateSession(req.auth!.token);
   const newToken = createSession(targetUserRow.id, targetBusinessId);
+
+  logSecurityAudit({
+    action: 'business_switch',
+    category: 'TENANT',
+    result: 'SUCCESS',
+    businessId: targetBusinessId,
+    userId: targetUserRow.id,
+    userName: targetUserRow.name,
+    userEmail: req.auth!.userEmail,
+    userRole: targetUserRow.role,
+    details: `Pengguna beralih ruang kerja ke ${bizRow.name} (${targetBusinessId}).`,
+    ipAddress: req.ip,
+    userAgent: req.headers['user-agent'] as string,
+  });
 
   logAudit(
     targetBusinessId,
@@ -511,7 +688,7 @@ apiRouter.get('/users', authenticate, requireRole(['Administrator', 'Manager / O
   return res.json(users);
 });
 
-apiRouter.post('/users', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner'], 'create'), (req: Request, res: Response) => {
+apiRouter.post('/users', authenticate, enforceSubscriptionAccess, requireResourceLimit('users'), requireRole(['Administrator', 'Manager / Owner'], 'create'), (req: Request, res: Response) => {
   try {
     const { name, email, role, phone, active = true, avatar, password } = req.body;
     if (!name || !email) {
@@ -611,6 +788,34 @@ apiRouter.put('/users/:id', authenticate, enforceSubscriptionAccess, requireRole
     const salt = generateSaltServer();
     const pwdHash = hashPasswordServer(req.body.newPassword, salt);
     db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ? AND business_id = ?').run(pwdHash, salt, id, req.businessId!);
+    logSecurityAudit({
+      action: 'password_change',
+      category: 'AUTH',
+      result: 'SUCCESS',
+      businessId: req.businessId!,
+      userId: req.auth!.userId,
+      userName: req.auth!.userName,
+      details: `Mengubah kata sandi untuk pengguna ${updated.name}`,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] as string,
+    });
+  }
+
+  if (req.body.role && req.body.role !== currentObj.role) {
+    logSecurityAudit({
+      action: 'role_change',
+      category: 'RBAC',
+      result: 'SUCCESS',
+      businessId: req.businessId!,
+      userId: req.auth!.userId,
+      userName: req.auth!.userName,
+      userEmail: req.auth!.userEmail,
+      userRole: req.auth!.userRole,
+      details: `Mengubah peran (role) pengguna ${updated.name} dari ${currentObj.role} menjadi ${updated.role}`,
+      metadata: { targetUserId: id, oldRole: currentObj.role, newRole: updated.role },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] as string,
+    });
   }
 
   db.prepare(`
@@ -635,6 +840,21 @@ apiRouter.delete('/users/:id', authenticate, requireRole(['Administrator'], 'del
     return res.status(404).json({ error: 'NotFound', message: 'Pengguna tidak ditemukan dalam bisnis ini.' });
   }
 
+  logSecurityAudit({
+    action: 'user_deletion',
+    category: 'RBAC',
+    result: 'SUCCESS',
+    businessId: req.businessId!,
+    userId: req.auth!.userId,
+    userName: req.auth!.userName,
+    userEmail: req.auth!.userEmail,
+    userRole: req.auth!.userRole,
+    details: `Menghapus akun pengguna target: ${id}`,
+    metadata: { targetUserId: id },
+    ipAddress: req.ip,
+    userAgent: req.headers['user-agent'] as string,
+  });
+
   logAudit(req.businessId!, req.auth!.userId, req.auth!.userName, 'Hapus User', 'Pengguna', `Menghapus pengguna ID: ${id}`);
   return res.json({ success: true, message: 'Pengguna berhasil dihapus.' });
 });
@@ -648,7 +868,7 @@ apiRouter.get('/products', authenticate, (req: Request, res: Response) => {
   return res.json(rows.map((r) => JSON.parse(r.data_json)));
 });
 
-apiRouter.post('/products', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant'], 'create'), (req: Request, res: Response) => {
+apiRouter.post('/products', authenticate, enforceSubscriptionAccess, requireResourceLimit('products'), requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant'], 'create'), (req: Request, res: Response) => {
   try {
     // Check product quota limit for plan
     if (req.subscription?.limits) {
@@ -733,7 +953,7 @@ apiRouter.get('/raw-materials', authenticate, (req: Request, res: Response) => {
   return res.json(rows.map((r) => JSON.parse(r.data_json)));
 });
 
-apiRouter.post('/raw-materials', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant', 'Inventory Staff'], 'create'), (req: Request, res: Response) => {
+apiRouter.post('/raw-materials', authenticate, enforceSubscriptionAccess, requireResourceLimit('raw_materials'), requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant', 'Inventory Staff'], 'create'), (req: Request, res: Response) => {
   try {
     // Check raw materials quota limit for plan
     if (req.subscription?.limits) {
@@ -974,7 +1194,7 @@ apiRouter.get('/boms', authenticate, requireRole(['Administrator', 'Manager / Ow
   return res.json(rows.map((r) => JSON.parse(r.data_json)));
 });
 
-apiRouter.post('/boms', authenticate, requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant'], 'create'), (req: Request, res: Response) => {
+apiRouter.post('/boms', authenticate, enforceSubscriptionAccess, requireResourceLimit('boms'), requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant'], 'create'), (req: Request, res: Response) => {
   const bom = req.body;
   const id = bom.id || `bom_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
   const now = new Date().toISOString();
@@ -1035,7 +1255,7 @@ apiRouter.get('/production/batches', authenticate, (req: Request, res: Response)
   return res.json(batches);
 });
 
-apiRouter.post('/production/batches', authenticate, requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant', 'Staff'], 'create'), (req: Request, res: Response) => {
+apiRouter.post('/production/batches', authenticate, enforceSubscriptionAccess, requireResourceLimit('batches'), requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant', 'Staff'], 'create'), (req: Request, res: Response) => {
   const batch = req.body;
   const id = batch.id || `prd_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
   const item = {
@@ -1924,6 +2144,17 @@ apiRouter.post('/users/invite', authenticate, enforceSubscriptionAccess, require
 
     logAudit(req.businessId!, req.auth!.userId, req.auth!.userName, 'Undang User', 'Pengguna', `Mengirim undangan pengguna ke ${email} (${role}).`);
 
+    // Non-blocking team invitation email dispatch
+    const inviteUrl = `${req.protocol}://${req.get('host')}/accept-invite?token=${token}`;
+    emailService.sendTeamInvitation(email, {
+      inviteeEmail: email,
+      inviterName: req.auth!.userName,
+      businessName: req.auth!.businessName,
+      role: role || 'Cost Accountant',
+      inviteUrl,
+      expiresAt: expiresAt.substring(0, 10),
+    }).catch((err) => console.error('[Invite] Email dispatch failed silently:', err));
+
     return res.status(201).json({
       success: true,
       invitation: { id, email, role, token, expiresAt, status: 'PENDING' },
@@ -2325,6 +2556,16 @@ apiRouter.post('/billing/checkout', authenticate, requireRole(['Administrator', 
       return res.status(404).json({ error: 'NotFound', message: `Paket ${planCode} tidak ditemukan atau belum aktif.` });
     }
 
+    // Downgrade Safety Validation: Ensure existing data volume does not violate target limits
+    const safetyCheck = validatePlanChangeSafety(req.businessId!, planCode);
+    if (!safetyCheck.safe) {
+      return res.status(400).json({
+        error: 'PLAN_DOWNGRADE_UNSAFE',
+        message: 'Perubahan paket tidak dapat diproses karena volume data yang ada melebihi batas kuota paket tujuan.',
+        details: safetyCheck.errors,
+      });
+    }
+
     const isYearly = billingCycle.toUpperCase() === 'YEARLY';
     const amount = isYearly ? planRow.price_yearly : planRow.price_monthly;
     const now = new Date();
@@ -2370,13 +2611,13 @@ apiRouter.post('/billing/checkout', authenticate, requireRole(['Administrator', 
       JSON.stringify(invoiceObj)
     );
 
-    // Update Subscription in Database
+    // Update Subscription in Database (with payment_reference)
     const subId = `sub_${req.businessId!}`;
     db.prepare(`
       INSERT INTO subscriptions (
         id, business_id, plan_id, status, billing_cycle,
-        start_date, end_date, trial_start, trial_end, is_read_only, notes, created_at, updated_at
-      ) VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?, NULL, NULL, 0, ?, ?, ?)
+        start_date, end_date, trial_start, trial_end, is_read_only, payment_reference, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?, NULL, NULL, 0, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         plan_id = excluded.plan_id,
         status = 'ACTIVE',
@@ -2384,6 +2625,7 @@ apiRouter.post('/billing/checkout', authenticate, requireRole(['Administrator', 
         start_date = excluded.start_date,
         end_date = excluded.end_date,
         is_read_only = 0,
+        payment_reference = excluded.payment_reference,
         notes = excluded.notes,
         updated_at = excluded.updated_at
     `).run(
@@ -2393,6 +2635,7 @@ apiRouter.post('/billing/checkout', authenticate, requireRole(['Administrator', 
       invoiceObj.billingCycle,
       now.toISOString(),
       endDate.toISOString(),
+      invoiceNumber,
       `Aktivasi paket ${planRow.name} via ${paymentMethod}`,
       now.toISOString(),
       now.toISOString()
@@ -2430,12 +2673,22 @@ apiRouter.post('/billing/checkout', authenticate, requireRole(['Administrator', 
         planCode: planRow.code,
         planName: planRow.name,
         endDate: endDate.toISOString(),
+        paymentReference: invoiceNumber,
         isReadOnly: false,
       },
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'ServerError', message: err.message });
   }
+});
+
+// Single Source of Truth Entitlement API (Requirement: whether business/user can use a feature)
+apiRouter.get('/subscription/entitlements', authenticate, (req: Request, res: Response) => {
+  const summary = getBusinessEntitlementSummary(req.businessId!);
+  if (!summary) {
+    return res.status(404).json({ error: 'NotFound', message: 'Data langganan bisnis tidak ditemukan.' });
+  }
+  return res.json(summary);
 });
 
 // Get Invoices History (Requirement 2 & Customer Journey)
@@ -2466,4 +2719,278 @@ apiRouter.get('/billing/invoices', authenticate, requireRole(['Administrator', '
   } catch (err: any) {
     return res.status(500).json({ error: 'ServerError', message: err.message });
   }
+});
+
+// Step 2 & 3: Initiate Payment Gateway Transaction
+apiRouter.post('/billing/create-payment-intent', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'create'), async (req: Request, res: Response) => {
+  try {
+    const { planCode = 'PRO', billingCycle = 'MONTHLY', paymentMethod = 'QRIS', customerEmail } = req.body;
+
+    const safetyCheck = validatePlanChangeSafety(req.businessId!, planCode);
+    if (!safetyCheck.safe) {
+      return res.status(400).json({
+        error: 'PLAN_DOWNGRADE_UNSAFE',
+        message: 'Perubahan paket tidak dapat diproses karena volume data yang ada melebihi batas kuota paket tujuan.',
+        details: safetyCheck.errors,
+      });
+    }
+
+    const session = await paymentService.createCheckoutSession({
+      businessId: req.businessId!,
+      businessName: req.auth!.businessName,
+      planCode,
+      billingCycle,
+      paymentMethod,
+      actorUserId: req.auth!.userId,
+      actorUserName: req.auth!.userName,
+      actorUserRole: req.auth!.userRole,
+      customerEmail: customerEmail || req.auth!.userEmail,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Sesi transaksi pembayaran berhasil diterbitkan.',
+      ...session,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'ServerError', message: err.message });
+  }
+});
+
+// Step 4 & 5: Public Webhook Endpoint (Called by Payment Gateway)
+apiRouter.post('/billing/webhook', async (req: Request, res: Response) => {
+  try {
+    const result = await paymentService.processWebhook(req.headers, req.body);
+    if (!result.success) {
+      return res.status(result.code).json(result);
+    }
+    return res.status(result.code).json(result);
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'WEBHOOK_INTERNAL_ERROR',
+      message: err.message,
+    });
+  }
+});
+
+// Simulation helper for sandbox testing
+apiRouter.post('/billing/simulate-settlement', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'create'), async (req: Request, res: Response) => {
+  try {
+    const { invoiceNumber } = req.body;
+    if (!invoiceNumber) {
+      return res.status(400).json({ error: 'BadRequest', message: 'Nomor invoice wajib disertakan.' });
+    }
+
+    const result = await paymentService.simulatePaymentSettlement(invoiceNumber);
+    return res.status(result.code).json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'ServerError', message: err.message });
+  }
+});
+
+// Get Payment Transactions
+apiRouter.get('/billing/transactions', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'view'), (req: Request, res: Response) => {
+  try {
+    const rows = db.prepare(`
+      SELECT pt.*, inv.invoice_number, inv.plan_name
+      FROM payment_transactions pt
+      JOIN invoices inv ON pt.invoice_id = inv.id
+      WHERE pt.business_id = ?
+      ORDER BY pt.created_at DESC
+    `).all(req.businessId!) as any[];
+
+    return res.json(rows);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'ServerError', message: err.message });
+  }
+});
+
+// Trigger Subscription / Trial Reminder Email (Requirement 7)
+apiRouter.post('/subscription/send-reminder', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'create'), async (req: Request, res: Response) => {
+  try {
+    const summary = getBusinessEntitlementSummary(req.businessId!);
+    if (!summary) {
+      return res.status(404).json({ error: 'NotFound', message: 'Data langganan tidak ditemukan.' });
+    }
+
+    const ownerUser = db.prepare("SELECT name, email FROM users WHERE business_id = ? AND role = 'Manager / Owner'").get(req.businessId!) as any;
+    const targetEmail = req.body.email || ownerUser?.email || req.auth!.userEmail;
+    const targetName = ownerUser?.name || req.auth!.userName;
+
+    const isTrial = summary.subscription.status === 'TRIAL';
+    const expiryDate = (isTrial && summary.subscription.trialEnd ? summary.subscription.trialEnd : summary.subscription.endDate).substring(0, 10);
+
+    const emailResult = await emailService.sendSubscriptionReminder(targetEmail, {
+      customerName: targetName,
+      businessName: summary.businessName,
+      planName: summary.plan.name,
+      daysRemaining: summary.subscription.daysRemaining,
+      expiryDate,
+      upgradeUrl: `${req.protocol}://${req.get('host')}/pricing`,
+      isTrial,
+    });
+
+    return res.json({
+      success: true,
+      message: `Email pengingat langganan berhasil dikirimkan ke ${targetEmail}.`,
+      dispatch: emailResult,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'ServerError', message: err.message });
+  }
+});
+
+// Inspect Outgoing Emails (For Sandbox QA and Testing)
+apiRouter.get('/system/email-outbox', authenticate, requireRole(['Administrator'], 'view'), (req: Request, res: Response) => {
+  const outbox = emailService.getOutbox();
+  return res.json({
+    provider: emailService.getProviderName(),
+    totalSent: outbox.length,
+    outbox,
+  });
+});
+
+// ============================================================================
+// 15. AUDIT & ERROR MONITORING ENDPOINTS (PROMPT 08)
+// ============================================================================
+
+// 1. Get Security Audit Logs (Auth, RBAC, Billing, Tenant, Admin actions)
+apiRouter.get('/audit/security-logs', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'view'), (req: Request, res: Response) => {
+  try {
+    const isSuper = req.auth?.userRole === 'SUPER_ADMIN';
+    const { action, category, result, limit = 100 } = req.query;
+
+    let query = `
+      SELECT s.*, b.name as business_name
+      FROM security_audit_logs s
+      LEFT JOIN businesses b ON s.business_id = b.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    // Tenant isolation: Regular admins only see their own business security logs
+    if (!isSuper) {
+      query += ` AND s.business_id = ?`;
+      params.push(req.businessId!);
+    }
+
+    if (action) {
+      query += ` AND s.action = ?`;
+      params.push(action);
+    }
+    if (category) {
+      query += ` AND s.category = ?`;
+      params.push(category);
+    }
+    if (result) {
+      query += ` AND s.result = ?`;
+      params.push(result);
+    }
+
+    query += ` ORDER BY s.timestamp DESC LIMIT ?`;
+    params.push(Math.min(Number(limit) || 100, 500));
+
+    const rows = db.prepare(query).all(...params) as any[];
+    const formatted = rows.map((r) => ({
+      id: r.id,
+      businessId: r.business_id,
+      businessName: r.business_name,
+      userId: r.user_id,
+      userName: r.user_name,
+      userEmail: r.user_email,
+      userRole: r.user_role,
+      action: r.action,
+      category: r.category,
+      result: r.result,
+      ipAddress: r.ip_address,
+      userAgent: r.user_agent,
+      details: r.details,
+      metadata: r.metadata_json ? JSON.parse(r.metadata_json) : null,
+      timestamp: r.timestamp,
+    }));
+
+    return res.json(formatted);
+  } catch (err: any) {
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'ServerError', errorId: rec.errorId, message: 'Gagal mengambil log audit keamanan.' });
+  }
+});
+
+// 2. Get Business Activity Logs (BOM, Recipe, Products, Production, POs)
+apiRouter.get('/audit/activity-logs', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'view'), (req: Request, res: Response) => {
+  try {
+    const rows = db.prepare(`
+      SELECT *
+      FROM activity_logs
+      WHERE business_id = ?
+      ORDER BY timestamp DESC
+      LIMIT 100
+    `).all(req.businessId!) as any[];
+
+    const logs = rows.map((r) => {
+      try {
+        return JSON.parse(r.data_json);
+      } catch {
+        return {
+          id: r.id,
+          businessId: r.business_id,
+          userId: r.user_id,
+          action: r.action,
+          module: r.module,
+          timestamp: r.timestamp,
+        };
+      }
+    });
+
+    return res.json(logs);
+  } catch (err: any) {
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'ServerError', errorId: rec.errorId, message: 'Gagal mengambil log aktivitas bisnis.' });
+  }
+});
+
+// 3. Centralized Incident & Error Monitoring Logs
+apiRouter.get('/system/error-logs', authenticate, requireRole(['Administrator'], 'view'), (req: Request, res: Response) => {
+  try {
+    const isSuper = req.auth?.userRole === 'SUPER_ADMIN';
+    const { errorId, statusCode, limit = 50 } = req.query;
+
+    let query = `SELECT * FROM error_logs WHERE 1=1`;
+    const params: any[] = [];
+
+    if (!isSuper) {
+      query += ` AND business_id = ?`;
+      params.push(req.businessId!);
+    }
+
+    if (errorId) {
+      query += ` AND error_id = ?`;
+      params.push(errorId);
+    }
+    if (statusCode) {
+      query += ` AND status_code = ?`;
+      params.push(Number(statusCode));
+    }
+
+    query += ` ORDER BY timestamp DESC LIMIT ?`;
+    params.push(Math.min(Number(limit) || 50, 200));
+
+    const rows = db.prepare(query).all(...params) as any[];
+    return res.json(rows);
+  } catch (err: any) {
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'ServerError', errorId: rec.errorId, message: 'Gagal mengambil data monitoring error.' });
+  }
+});
+
+// 4. Strict Immutability Protection: Audit logs CANNOT be deleted by regular users
+apiRouter.all(['/audit/*', '/security-logs/*', '/activity-logs/*'], (req: Request, res: Response, next) => {
+  if (req.method === 'DELETE') {
+    return res.status(403).json({
+      error: 'AUDIT_LOG_IMMUTABLE',
+      message: 'Akses ditolak: Catatan audit log bersifat permanen (immutable) dan tidak dapat dihapus oleh pengguna biasa.',
+    });
+  }
+  next();
 });

@@ -312,6 +312,82 @@ export function initDatabase() {
       data_json TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_invoices_biz ON invoices(business_id);
+
+    CREATE TABLE IF NOT EXISTS payment_transactions (
+      id TEXT PRIMARY KEY,
+      business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+      invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      provider_tx_id TEXT,
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'IDR',
+      payment_method TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      payment_url TEXT,
+      qr_code_data TEXT,
+      virtual_account TEXT,
+      metadata_json TEXT,
+      paid_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_pay_tx_biz ON payment_transactions(business_id);
+    CREATE INDEX IF NOT EXISTS idx_pay_tx_inv ON payment_transactions(invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_pay_tx_provider ON payment_transactions(provider_tx_id);
+
+    CREATE TABLE IF NOT EXISTS webhook_events (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      reference_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      processed_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhook_ref ON webhook_events(reference_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_webhook_event ON webhook_events(provider, event_id);
+
+    CREATE TABLE IF NOT EXISTS security_audit_logs (
+      id TEXT PRIMARY KEY,
+      business_id TEXT,
+      user_id TEXT,
+      user_name TEXT,
+      user_email TEXT,
+      user_role TEXT,
+      action TEXT NOT NULL,
+      category TEXT NOT NULL,
+      result TEXT NOT NULL,
+      ip_address TEXT,
+      user_agent TEXT,
+      details TEXT,
+      metadata_json TEXT,
+      timestamp TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sec_logs_biz ON security_audit_logs(business_id);
+    CREATE INDEX IF NOT EXISTS idx_sec_logs_action ON security_audit_logs(action);
+    CREATE INDEX IF NOT EXISTS idx_sec_logs_time ON security_audit_logs(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_sec_logs_user ON security_audit_logs(user_id);
+
+    CREATE TABLE IF NOT EXISTS error_logs (
+      id TEXT PRIMARY KEY,
+      error_id TEXT NOT NULL UNIQUE,
+      business_id TEXT,
+      user_id TEXT,
+      path TEXT NOT NULL,
+      method TEXT NOT NULL,
+      status_code INTEGER NOT NULL,
+      error_name TEXT NOT NULL,
+      message TEXT NOT NULL,
+      sanitized_message TEXT NOT NULL,
+      stack_trace TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      timestamp TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_err_logs_err_id ON error_logs(error_id);
+    CREATE INDEX IF NOT EXISTS idx_err_logs_time ON error_logs(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_err_logs_biz ON error_logs(business_id);
   `);
 
   // Safe migrations for existing databases: ensure date, order_date, and onboarding columns exist
@@ -322,10 +398,14 @@ export function initDatabase() {
   try { db.exec('ALTER TABLE businesses ADD COLUMN onboarding_step INTEGER DEFAULT 1;'); } catch {}
   try { db.exec('ALTER TABLE businesses ADD COLUMN onboarding_data_json TEXT;'); } catch {}
   try { db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 1;'); } catch {}
+  try { db.exec('ALTER TABLE subscriptions ADD COLUMN payment_reference TEXT;'); } catch {}
 
   ensurePlatformAndPlansSeeded();
   seedIfEmpty();
 }
+
+// Auto-initialize tables on module load
+initDatabase();
 
 export function logAdminAudit(
   actorUserId: string,

@@ -2,6 +2,11 @@ import { Request, Response, NextFunction } from 'express';
 import { db, hashPasswordServer, generateSaltServer, verifyPasswordServer } from './db';
 import crypto from 'node:crypto';
 import { UserProfile, FeatureKey, SaaSSubscriptionStatus, PlanLimits } from '../types';
+import {
+  evaluateSubscriptionLifecycle,
+  checkFeatureEntitlement,
+  checkResourceLimit,
+} from './entitlements';
 
 export interface AuthContext {
   token: string;
@@ -25,6 +30,8 @@ export interface ActiveSubscriptionContext {
   planName: string;
   status: SaaSSubscriptionStatus;
   isReadOnly: boolean;
+  inGracePeriod?: boolean;
+  gracePeriodEndsAt?: string;
   features: FeatureKey[];
   limits: PlanLimits;
   trialEnd?: string;
@@ -281,30 +288,27 @@ export function enforceSubscriptionAccess(req: Request, res: Response, next: Nex
     `).get(subId) as any;
   }
 
-  let subStatus = String(subRow.status).toUpperCase();
-  let isReadOnly = Boolean(subRow.is_read_only);
-
-  // 3. Check trial expiration
-  if (subStatus === 'TRIAL' && subRow.trial_end) {
-    const trialEndTime = new Date(subRow.trial_end).getTime();
-    if (Date.now() > trialEndTime) {
-      subStatus = 'EXPIRED';
-      isReadOnly = true;
-      db.prepare("UPDATE subscriptions SET status = 'EXPIRED', is_read_only = 1 WHERE id = ?").run(subRow.id);
-      db.prepare("UPDATE businesses SET status = 'EXPIRED' WHERE id = ?").run(bizId);
-    }
-  }
+  // 3. Centralized Lifecycle Evaluation (TRIAL, ACTIVE, PAST_DUE, EXPIRED, CANCELLED, SUSPENDED)
+  const lifecycle = evaluateSubscriptionLifecycle(subRow);
 
   // 4. Graceful Expiration & Read-Only enforcement:
-  // If subscription is EXPIRED, CANCELLED, or is_read_only is 1:
-  // Block any state mutations (POST, PUT, DELETE), but allow GET so users can still read and export their data!
-  if ((subStatus === 'EXPIRED' || subStatus === 'CANCELLED' || isReadOnly) && req.method !== 'GET') {
+  // If subscription is EXPIRED, CANCELLED, or isReadOnly is true:
+  // Block any state mutations (POST, PUT, DELETE), but allow GET so users can always read and export their data!
+  if ((lifecycle.status === 'EXPIRED' || lifecycle.status === 'CANCELLED' || lifecycle.isReadOnly) && req.method !== 'GET') {
     return res.status(403).json({
       error: 'SUBSCRIPTION_EXPIRED_READ_ONLY',
-      status: subStatus,
+      status: lifecycle.status,
       isReadOnly: true,
-      message: 'Masa aktif langganan atau trial bisnis Anda telah berakhir (Mode Baca-Saja). Anda tetap dapat melihat data, namun penambahan dan perubahan data dinonaktifkan.',
+      message: 'Masa aktif langganan atau trial bisnis Anda telah berakhir (Mode Baca-Saja). Anda tetap dapat melihat dan mengekspor data, namun penambahan dan perubahan data dinonaktifkan.',
     });
+  }
+
+  // Grace Period Warning header for frontend notifications
+  if (lifecycle.inGracePeriod) {
+    res.setHeader('X-Subscription-Past-Due', 'true');
+    if (lifecycle.gracePeriodEndsAt) {
+      res.setHeader('X-Subscription-Grace-End', lifecycle.gracePeriodEndsAt);
+    }
   }
 
   let features: FeatureKey[] = [];
@@ -329,8 +333,10 @@ export function enforceSubscriptionAccess(req: Request, res: Response, next: Nex
     planId: subRow.plan_id,
     planCode: subRow.plan_code,
     planName: subRow.plan_name,
-    status: subStatus as SaaSSubscriptionStatus,
-    isReadOnly,
+    status: lifecycle.status,
+    isReadOnly: lifecycle.isReadOnly,
+    inGracePeriod: lifecycle.inGracePeriod,
+    gracePeriodEndsAt: lifecycle.gracePeriodEndsAt,
     features,
     limits,
     trialEnd: subRow.trial_end,
@@ -347,16 +353,43 @@ export function requireFeature(feature: FeatureKey) {
       return next();
     }
 
-    if (!req.subscription) {
-      return next();
+    const bizId = req.businessId;
+    if (!bizId) {
+      return res.status(400).json({ error: 'BadRequest', message: 'Business ID tidak valid.' });
     }
 
-    if (!req.subscription.features.includes(feature)) {
+    const check = checkFeatureEntitlement(bizId, feature);
+    if (!check.allowed) {
       return res.status(403).json({
         error: 'FEATURE_NOT_AVAILABLE',
         feature,
-        currentPlan: req.subscription.planCode,
-        message: `Fitur '${feature}' tidak tersedia pada paket Anda (${req.subscription.planName}). Silakan hubungi Super Admin untuk meningkatkan paket Anda.`,
+        currentPlan: check.planCode,
+        message: check.reason || `Fitur '${feature}' tidak tersedia pada paket Anda (${check.planName}). Silakan tingkatkan paket Anda.`,
+      });
+    }
+
+    next();
+  };
+}
+
+export function requireResourceLimit(resource: 'users' | 'products' | 'raw_materials' | 'boms' | 'batches') {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (req.auth?.userRole === 'SUPER_ADMIN') {
+      return next();
+    }
+
+    const bizId = req.businessId;
+    if (!bizId) return next();
+
+    const limitCheck = checkResourceLimit(bizId, resource);
+    if (!limitCheck.allowed) {
+      return res.status(403).json({
+        error: 'PLAN_LIMIT_REACHED',
+        resource,
+        current: limitCheck.current,
+        max: limitCheck.max,
+        currentPlan: limitCheck.planCode,
+        message: limitCheck.message,
       });
     }
 

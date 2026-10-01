@@ -31,6 +31,10 @@ export const RELATIONAL_TABLES = [
   'invoices',
   'admin_audit_logs',
   'password_reset_tokens',
+  'payment_transactions',
+  'webhook_events',
+  'security_audit_logs',
+  'error_logs',
 ] as const;
 
 /**
@@ -61,7 +65,15 @@ export function auditDatabaseIntegrity(): IntegrityCheckResult {
 
   // 3. Tenant Isolation & Orphan Check: every business_id must exist in businesses
   for (const table of RELATIONAL_TABLES) {
-    if (table === 'businesses' || table === 'plans' || table === 'admin_audit_logs' || table === 'password_reset_tokens') {
+    if (
+      table === 'businesses' ||
+      table === 'plans' ||
+      table === 'admin_audit_logs' ||
+      table === 'password_reset_tokens' ||
+      table === 'webhook_events' ||
+      table === 'error_logs' ||
+      table === 'security_audit_logs'
+    ) {
       continue;
     }
     try {
