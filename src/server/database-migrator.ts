@@ -35,6 +35,7 @@ export const RELATIONAL_TABLES = [
   'webhook_events',
   'security_audit_logs',
   'error_logs',
+  'system_backups',
 ] as const;
 
 /**
@@ -72,7 +73,8 @@ export function auditDatabaseIntegrity(): IntegrityCheckResult {
       table === 'password_reset_tokens' ||
       table === 'webhook_events' ||
       table === 'error_logs' ||
-      table === 'security_audit_logs'
+      table === 'security_audit_logs' ||
+      table === 'system_backups'
     ) {
       continue;
     }

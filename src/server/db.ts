@@ -388,6 +388,28 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_err_logs_err_id ON error_logs(error_id);
     CREATE INDEX IF NOT EXISTS idx_err_logs_time ON error_logs(timestamp);
     CREATE INDEX IF NOT EXISTS idx_err_logs_biz ON error_logs(business_id);
+
+    CREATE TABLE IF NOT EXISTS system_backups (
+      id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      business_id TEXT,
+      business_name TEXT,
+      version TEXT NOT NULL,
+      timestamp TEXT NOT NULL,
+      checksum_sha256 TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      tables_json TEXT NOT NULL,
+      record_counts_json TEXT NOT NULL,
+      encrypted INTEGER NOT NULL DEFAULT 1,
+      storage_location TEXT NOT NULL,
+      retention_expires_at TEXT NOT NULL,
+      triggered_by TEXT NOT NULL,
+      trigger_type TEXT NOT NULL,
+      status TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_backups_biz ON system_backups(business_id);
+    CREATE INDEX IF NOT EXISTS idx_backups_time ON system_backups(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_backups_retention ON system_backups(retention_expires_at);
   `);
 
   // Safe migrations for existing databases: ensure date, order_date, and onboarding columns exist

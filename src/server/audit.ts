@@ -164,3 +164,55 @@ export function logBusinessActivity(event: ActivityLogEvent): void {
     console.error('[ActivityLog] Failed to persist business activity record:', err);
   }
 }
+
+/**
+ * Super Admin Action Logger
+ */
+export function logAdminAudit(
+  actorUserId: string,
+  actorName: string,
+  actorRole: string,
+  action: string,
+  targetType: string,
+  targetId?: string,
+  businessId?: string,
+  metadata?: Record<string, any>
+): void {
+  try {
+    const id = `adm_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const timestamp = new Date().toISOString();
+
+    db.prepare(`
+      INSERT INTO admin_audit_logs (
+        id, actor_user_id, actor_name, actor_role, business_id, action, target_type, target_id, timestamp, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      actorUserId,
+      actorName,
+      actorRole,
+      businessId || null,
+      action,
+      targetType,
+      targetId || 'global',
+      timestamp,
+      metadata ? JSON.stringify(metadata) : null
+    );
+
+    // Also record in security_audit_logs for single comprehensive view
+    logSecurityAudit({
+      action: 'admin_action',
+      category: 'ADMIN',
+      result: 'SUCCESS',
+      businessId: businessId || undefined,
+      userId: actorUserId,
+      userName: actorName,
+      userRole: actorRole,
+      details: `Super Admin action "${action}" performed on ${targetType} (${targetId || 'global'}).`,
+      metadata,
+    });
+  } catch (err) {
+    console.error('[AdminAuditLog] Failed to persist admin audit record:', err);
+  }
+}
+

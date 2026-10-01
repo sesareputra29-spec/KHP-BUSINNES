@@ -472,6 +472,34 @@ class ApiService {
     });
   }
 
+  public async suspendAdminBusiness(id: string, reason?: string) {
+    return this.request<{ success: boolean; message: string; business: Business }>(`/api/admin/businesses/${id}/suspend`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  public async activateAdminBusiness(id: string) {
+    return this.request<{ success: boolean; message: string; business: Business }>(`/api/admin/businesses/${id}/activate`, {
+      method: 'POST',
+    });
+  }
+
+  public async archiveAdminBusiness(id: string, confirmationCode: string) {
+    return this.request<{ success: boolean; message: string; business: Business }>(`/api/admin/businesses/${id}/archive`, {
+      method: 'POST',
+      body: JSON.stringify({ confirmationCode }),
+    });
+  }
+
+  public async getAdminInvoices() {
+    return this.request<any[]>('/api/admin/invoices');
+  }
+
+  public async getAdminPayments() {
+    return this.request<any[]>('/api/admin/payments');
+  }
+
   public async getAdminPlans() {
     return this.request<SaaSPlan[]>('/api/admin/plans');
   }

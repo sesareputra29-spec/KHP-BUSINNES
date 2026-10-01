@@ -15,6 +15,7 @@ import { auditDatabaseIntegrity, generatePostgreSqlMigrationScript } from './dat
 import { getBusinessEntitlementSummary, validatePlanChangeSafety } from './entitlements';
 import { paymentService } from './payment/payment-service';
 import { emailService } from './email/email-service';
+import { backupService } from './backup/backup-service';
 import { logSecurityAudit, logBusinessActivity } from './audit';
 import { recordError, getRecentErrors } from './error-handler';
 import crypto from 'node:crypto';
@@ -589,7 +590,7 @@ apiRouter.post('/auth/switch-tenant', authenticate, (req: Request, res: Response
   // Only SUPER_ADMIN or users who have an active account in the target business can switch
   let targetUserRow: any = null;
   if (req.auth!.userRole === 'SUPER_ADMIN') {
-    targetUserRow = db.prepare('SELECT * FROM users WHERE business_id = ? ORDER BY CASE WHEN role = "Administrator" THEN 1 ELSE 2 END LIMIT 1').get(targetBusinessId) ||
+    targetUserRow = db.prepare("SELECT * FROM users WHERE business_id = ? ORDER BY CASE WHEN role = 'Administrator' THEN 1 ELSE 2 END LIMIT 1").get(targetBusinessId) ||
       db.prepare('SELECT * FROM users WHERE id = ?').get(req.auth!.userId);
   } else {
     targetUserRow = db.prepare('SELECT * FROM users WHERE business_id = ? AND LOWER(email) = ? AND active = 1')
@@ -1040,7 +1041,7 @@ apiRouter.get('/suppliers', authenticate, (req: Request, res: Response) => {
   return res.json(rows.map((r) => JSON.parse(r.data_json)));
 });
 
-apiRouter.post('/suppliers', authenticate, requireRole(['Administrator', 'Manager / Owner', 'Inventory Staff'], 'create'), (req: Request, res: Response) => {
+apiRouter.post('/suppliers', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner', 'Inventory Staff'], 'create'), (req: Request, res: Response) => {
   const sup = req.body;
   const id = sup.id || `sup_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
   const item = { ...sup, id, businessId: req.businessId!, tenantId: req.businessId! };
@@ -1052,7 +1053,7 @@ apiRouter.post('/suppliers', authenticate, requireRole(['Administrator', 'Manage
   return res.status(201).json(item);
 });
 
-apiRouter.put('/suppliers/:id', authenticate, requireRole(['Administrator', 'Manager / Owner', 'Inventory Staff'], 'edit'), (req: Request, res: Response) => {
+apiRouter.put('/suppliers/:id', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner', 'Inventory Staff'], 'edit'), (req: Request, res: Response) => {
   const { id } = req.params;
   const existing = db.prepare('SELECT data_json FROM suppliers WHERE id = ? AND business_id = ?').get(id, req.businessId!) as any;
   if (!existing) return res.status(404).json({ error: 'NotFound' });
@@ -1064,7 +1065,7 @@ apiRouter.put('/suppliers/:id', authenticate, requireRole(['Administrator', 'Man
   return res.json(updated);
 });
 
-apiRouter.delete('/suppliers/:id', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'delete'), (req: Request, res: Response) => {
+apiRouter.delete('/suppliers/:id', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner'], 'delete'), (req: Request, res: Response) => {
   const { id } = req.params;
   const resRun = db.prepare('DELETE FROM suppliers WHERE id = ? AND business_id = ?').run(id, req.businessId!);
   if (resRun.changes === 0) return res.status(404).json({ error: 'NotFound' });
@@ -1080,7 +1081,7 @@ apiRouter.get('/customers', authenticate, (req: Request, res: Response) => {
   return res.json(rows.map((r) => JSON.parse(r.data_json)));
 });
 
-apiRouter.post('/customers', authenticate, requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant'], 'create'), (req: Request, res: Response) => {
+apiRouter.post('/customers', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner', 'Cost Accountant'], 'create'), (req: Request, res: Response) => {
   const cust = req.body;
   const id = cust.id || `cust_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
   const item = { ...cust, id, businessId: req.businessId!, tenantId: req.businessId! };
@@ -1092,7 +1093,7 @@ apiRouter.post('/customers', authenticate, requireRole(['Administrator', 'Manage
   return res.status(201).json(item);
 });
 
-apiRouter.put('/customers/:id', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'edit'), (req: Request, res: Response) => {
+apiRouter.put('/customers/:id', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner'], 'edit'), (req: Request, res: Response) => {
   const { id } = req.params;
   const existing = db.prepare('SELECT data_json FROM customers WHERE id = ? AND business_id = ?').get(id, req.businessId!) as any;
   if (!existing) return res.status(404).json({ error: 'NotFound', message: 'Pelanggan tidak ditemukan dalam bisnis ini.' });
@@ -1104,7 +1105,7 @@ apiRouter.put('/customers/:id', authenticate, requireRole(['Administrator', 'Man
   return res.json(updated);
 });
 
-apiRouter.delete('/customers/:id', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'delete'), (req: Request, res: Response) => {
+apiRouter.delete('/customers/:id', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner'], 'delete'), (req: Request, res: Response) => {
   const { id } = req.params;
   const resRun = db.prepare('DELETE FROM customers WHERE id = ? AND business_id = ?').run(id, req.businessId!);
   if (resRun.changes === 0) return res.status(404).json({ error: 'NotFound', message: 'Pelanggan tidak ditemukan dalam bisnis ini.' });
@@ -1120,7 +1121,7 @@ apiRouter.get('/categories', authenticate, (req: Request, res: Response) => {
   return res.json(rows.map((r) => JSON.parse(r.data_json)));
 });
 
-apiRouter.post('/categories', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'create'), (req: Request, res: Response) => {
+apiRouter.post('/categories', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner'], 'create'), (req: Request, res: Response) => {
   const cat = req.body;
   const id = cat.id || `cat_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
   const item = { ...cat, id, businessId: req.businessId!, tenantId: req.businessId! };
@@ -1131,7 +1132,7 @@ apiRouter.post('/categories', authenticate, requireRole(['Administrator', 'Manag
   return res.status(201).json(item);
 });
 
-apiRouter.put('/categories/:id', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'edit'), (req: Request, res: Response) => {
+apiRouter.put('/categories/:id', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner'], 'edit'), (req: Request, res: Response) => {
   const { id } = req.params;
   const existing = db.prepare('SELECT data_json FROM categories WHERE id = ? AND business_id = ?').get(id, req.businessId!) as any;
   if (!existing) return res.status(404).json({ error: 'NotFound' });
@@ -1143,7 +1144,7 @@ apiRouter.put('/categories/:id', authenticate, requireRole(['Administrator', 'Ma
   return res.json(updated);
 });
 
-apiRouter.delete('/categories/:id', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'delete'), (req: Request, res: Response) => {
+apiRouter.delete('/categories/:id', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner'], 'delete'), (req: Request, res: Response) => {
   const { id } = req.params;
   const resRun = db.prepare('DELETE FROM categories WHERE id = ? AND business_id = ?').run(id, req.businessId!);
   if (resRun.changes === 0) return res.status(404).json({ error: 'NotFound' });
@@ -1155,7 +1156,7 @@ apiRouter.get('/units', authenticate, (req: Request, res: Response) => {
   return res.json(rows.map((r) => JSON.parse(r.data_json)));
 });
 
-apiRouter.post('/units', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'create'), (req: Request, res: Response) => {
+apiRouter.post('/units', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner'], 'create'), (req: Request, res: Response) => {
   const unit = req.body;
   const id = unit.id || `u_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
   const item = { ...unit, id, businessId: req.businessId!, tenantId: req.businessId! };
@@ -1166,7 +1167,7 @@ apiRouter.post('/units', authenticate, requireRole(['Administrator', 'Manager / 
   return res.status(201).json(item);
 });
 
-apiRouter.put('/units/:id', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'edit'), (req: Request, res: Response) => {
+apiRouter.put('/units/:id', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner'], 'edit'), (req: Request, res: Response) => {
   const { id } = req.params;
   const existing = db.prepare('SELECT data_json FROM units WHERE id = ? AND business_id = ?').get(id, req.businessId!) as any;
   if (!existing) return res.status(404).json({ error: 'NotFound' });
@@ -1178,7 +1179,7 @@ apiRouter.put('/units/:id', authenticate, requireRole(['Administrator', 'Manager
   return res.json(updated);
 });
 
-apiRouter.delete('/units/:id', authenticate, requireRole(['Administrator', 'Manager / Owner'], 'delete'), (req: Request, res: Response) => {
+apiRouter.delete('/units/:id', authenticate, enforceSubscriptionAccess, requireRole(['Administrator', 'Manager / Owner'], 'delete'), (req: Request, res: Response) => {
   const { id } = req.params;
   const resRun = db.prepare('DELETE FROM units WHERE id = ? AND business_id = ?').run(id, req.businessId!);
   if (resRun.changes === 0) return res.status(404).json({ error: 'NotFound' });
@@ -1787,19 +1788,52 @@ apiRouter.get('/admin/businesses/:id', authenticate, requireSuperAdmin, (req: Re
     ORDER BY s.created_at DESC LIMIT 1
   `).get(id) as any;
 
-  const users = (db.prepare('SELECT data_json FROM users WHERE business_id = ?').all(id) as any[]).map((u) => JSON.parse(u.data_json));
+  const users = (db.prepare('SELECT data_json FROM users WHERE business_id = ? ORDER BY created_at ASC').all(id) as any[]).map((u) => JSON.parse(u.data_json));
   const productCount = (db.prepare('SELECT COUNT(*) as count FROM products WHERE business_id = ?').get(id) as { count: number }).count;
   const materialCount = (db.prepare('SELECT COUNT(*) as count FROM raw_materials WHERE business_id = ?').get(id) as { count: number }).count;
   const bomCount = (db.prepare('SELECT COUNT(*) as count FROM boms WHERE business_id = ?').get(id) as { count: number }).count;
+
+  // Invoices & Transactions
+  const invoices = (db.prepare('SELECT * FROM invoices WHERE business_id = ? ORDER BY created_at DESC LIMIT 20').all(id) as any[]).map((r) => ({
+    id: r.id,
+    invoiceNumber: r.invoice_number,
+    planName: r.plan_name,
+    amount: r.amount,
+    currency: r.currency,
+    status: r.status,
+    billingCycle: r.billing_cycle,
+    paymentMethod: r.payment_method,
+    paidAt: r.paid_at,
+    createdAt: r.created_at,
+  }));
+
+  const payments = db.prepare(`
+    SELECT pt.*, inv.invoice_number
+    FROM payment_transactions pt
+    LEFT JOIN invoices inv ON pt.invoice_id = inv.id
+    WHERE pt.business_id = ?
+    ORDER BY pt.created_at DESC LIMIT 20
+  `).all(id) as any[];
+
+  // Last business activity
+  const recentActivities = (db.prepare('SELECT * FROM activity_logs WHERE business_id = ? ORDER BY timestamp DESC LIMIT 5').all(id) as any[]).map((r) => {
+    try { return JSON.parse(r.data_json); } catch { return r; }
+  });
+
+  const lastActivity = recentActivities[0] || null;
 
   return res.json({
     business: JSON.parse(bizRow.data_json),
     subscription: subRow ? {
       ...subRow,
-      features: JSON.parse(subRow.features_json),
-      limits: JSON.parse(subRow.limits_json),
+      features: JSON.parse(subRow.features_json || '[]'),
+      limits: JSON.parse(subRow.limits_json || '{}'),
     } : null,
     users,
+    invoices,
+    payments,
+    recentActivities,
+    lastActivity,
     quotas: {
       products: productCount,
       rawMaterials: materialCount,
@@ -1807,6 +1841,127 @@ apiRouter.get('/admin/businesses/:id', authenticate, requireSuperAdmin, (req: Re
       users: users.length,
     },
   });
+});
+
+apiRouter.post('/admin/businesses/:id/suspend', authenticate, requireSuperAdmin, (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { reason = 'Penangguhan administratif oleh Super Admin' } = req.body;
+
+  const existing = db.prepare('SELECT data_json FROM businesses WHERE id = ?').get(id) as any;
+  if (!existing) return res.status(404).json({ error: 'NotFound', message: 'Bisnis tidak ditemukan.' });
+
+  const currentObj = JSON.parse(existing.data_json);
+  const updatedObj = { ...currentObj, status: 'SUSPENDED', suspendReason: reason, suspendedAt: new Date().toISOString() };
+
+  db.prepare("UPDATE businesses SET status = 'SUSPENDED', data_json = ? WHERE id = ?").run(JSON.stringify(updatedObj), id);
+  db.prepare("UPDATE subscriptions SET status = 'SUSPENDED', is_read_only = 1 WHERE business_id = ?").run(id);
+
+  logAdminAudit(
+    req.auth!.userId,
+    req.auth!.userName,
+    req.auth!.userRole,
+    'SUSPEND_BUSINESS',
+    'BUSINESS',
+    id,
+    id,
+    { reason, previousStatus: currentObj.status }
+  );
+
+  return res.json({ success: true, message: `Bisnis ${currentObj.name} berhasil ditangguhkan (SUSPENDED).`, business: updatedObj });
+});
+
+apiRouter.post('/admin/businesses/:id/activate', authenticate, requireSuperAdmin, (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  const existing = db.prepare('SELECT data_json FROM businesses WHERE id = ?').get(id) as any;
+  if (!existing) return res.status(404).json({ error: 'NotFound', message: 'Bisnis tidak ditemukan.' });
+
+  const currentObj = JSON.parse(existing.data_json);
+  const updatedObj = { ...currentObj, status: 'ACTIVE', suspendReason: undefined, reactivatedAt: new Date().toISOString() };
+
+  db.prepare("UPDATE businesses SET status = 'ACTIVE', data_json = ? WHERE id = ?").run(JSON.stringify(updatedObj), id);
+  db.prepare("UPDATE subscriptions SET status = 'ACTIVE', is_read_only = 0 WHERE business_id = ?").run(id);
+
+  logAdminAudit(
+    req.auth!.userId,
+    req.auth!.userName,
+    req.auth!.userRole,
+    'ACTIVATE_BUSINESS',
+    'BUSINESS',
+    id,
+    id,
+    { previousStatus: currentObj.status }
+  );
+
+  return res.json({ success: true, message: `Bisnis ${currentObj.name} berhasil diaktifkan kembali (ACTIVE).`, business: updatedObj });
+});
+
+apiRouter.post('/admin/businesses/:id/archive', authenticate, requireSuperAdmin, (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { confirmationCode } = req.body;
+
+  const existing = db.prepare('SELECT data_json, name FROM businesses WHERE id = ?').get(id) as any;
+  if (!existing) return res.status(404).json({ error: 'NotFound', message: 'Bisnis tidak ditemukan.' });
+
+  const cleanName = existing.name.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (confirmationCode !== `ARCHIVE-${cleanName}`) {
+    return res.status(400).json({
+      error: 'CONFIRMATION_CODE_MISMATCH',
+      message: `Kode konfirmasi tidak valid. Masukkan "ARCHIVE-${cleanName}" untuk mengarsipkan bisnis ini.`,
+    });
+  }
+
+  const currentObj = JSON.parse(existing.data_json);
+  const updatedObj = { ...currentObj, status: 'ARCHIVED', archivedAt: new Date().toISOString() };
+
+  db.prepare("UPDATE businesses SET status = 'ARCHIVED', data_json = ? WHERE id = ?").run(JSON.stringify(updatedObj), id);
+  db.prepare("UPDATE subscriptions SET status = 'EXPIRED', is_read_only = 1 WHERE business_id = ?").run(id);
+
+  logAdminAudit(
+    req.auth!.userId,
+    req.auth!.userName,
+    req.auth!.userRole,
+    'ARCHIVE_BUSINESS',
+    'BUSINESS',
+    id,
+    id,
+    { name: existing.name }
+  );
+
+  return res.json({ success: true, message: `Bisnis ${existing.name} berhasil diarsipkan secara aman tanpa menghapus riwayat audit.`, business: updatedObj });
+});
+
+apiRouter.get('/admin/invoices', authenticate, requireSuperAdmin, (req: Request, res: Response) => {
+  const rows = db.prepare(`
+    SELECT
+      inv.*,
+      b.name as business_name,
+      p.code as plan_code
+    FROM invoices inv
+    JOIN businesses b ON inv.business_id = b.id
+    LEFT JOIN plans p ON inv.plan_id = p.id
+    ORDER BY inv.created_at DESC
+    LIMIT 200
+  `).all() as any[];
+
+  return res.json(rows);
+});
+
+apiRouter.get('/admin/payments', authenticate, requireSuperAdmin, (req: Request, res: Response) => {
+  const rows = db.prepare(`
+    SELECT
+      pt.*,
+      b.name as business_name,
+      inv.invoice_number,
+      inv.plan_name
+    FROM payment_transactions pt
+    JOIN businesses b ON pt.business_id = b.id
+    LEFT JOIN invoices inv ON pt.invoice_id = inv.id
+    ORDER BY pt.created_at DESC
+    LIMIT 200
+  `).all() as any[];
+
+  return res.json(rows);
 });
 
 apiRouter.put('/admin/businesses/:id/status', authenticate, requireSuperAdmin, (req: Request, res: Response) => {
@@ -2994,3 +3149,124 @@ apiRouter.all(['/audit/*', '/security-logs/*', '/activity-logs/*'], (req: Reques
   }
   next();
 });
+
+// ============================================================================
+// 16. BACKUP, RECOVERY & DISASTER RECOVERY ENDPOINTS (PROMPT 09)
+// ============================================================================
+
+// 1. Create a Backup Snapshot
+apiRouter.post('/system/backup', authenticate, requireRole(['Administrator'], 'create'), async (req: Request, res: Response) => {
+  try {
+    const { scope = 'TENANT', retentionDays } = req.body;
+    const isSuper = req.auth?.userRole === 'SUPER_ADMIN';
+
+    if (scope === 'PLATFORM_FULL' && !isSuper) {
+      return res.status(403).json({
+        error: 'FORBIDDEN_SUPER_ADMIN_ONLY',
+        message: 'Akses ditolak: Hanya Super Admin yang berhak membuat cadangan penuh platform (Full Platform Backup).',
+      });
+    }
+
+    let backup: any;
+    if (scope === 'PLATFORM_FULL') {
+      backup = await backupService.createPlatformFullBackup(req.auth!.userName, 'MANUAL_ADMIN', retentionDays);
+    } else {
+      backup = await backupService.createTenantBackup(req.businessId!, req.auth!.userName, 'MANUAL_ADMIN', retentionDays);
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: `Cadangan data (${backup.scope}) berhasil dibuat dan disimpan secara aman.`,
+      backup,
+    });
+  } catch (err: any) {
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'ServerError', errorId: rec.errorId, message: err.message });
+  }
+});
+
+// 2. List Available Backups
+apiRouter.get('/system/backups', authenticate, requireRole(['Administrator'], 'view'), (req: Request, res: Response) => {
+  try {
+    const isSuper = req.auth?.userRole === 'SUPER_ADMIN';
+    const list = backupService.getBackupList(req.businessId!, isSuper);
+    return res.json(list);
+  } catch (err: any) {
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'ServerError', errorId: rec.errorId, message: 'Gagal mengambil daftar cadangan data.' });
+  }
+});
+
+// 3. Cryptographically Verify Backup Integrity (SHA-256 Checksum & Structure)
+apiRouter.post('/system/backup/:id/verify', authenticate, requireRole(['Administrator'], 'view'), async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const result = await backupService.verifyBackup(id);
+    return res.json(result);
+  } catch (err: any) {
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'ServerError', errorId: rec.errorId, message: 'Gagal memverifikasi cadangan data.' });
+  }
+});
+
+// 4. Restore Tenant Backup (Supports dryRun validation)
+apiRouter.post('/system/backup/:id/restore', authenticate, requireRole(['Administrator'], 'create'), async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { dryRun = false } = req.body;
+    const isSuper = req.auth?.userRole === 'SUPER_ADMIN';
+
+    // Verify backup exists and belongs to this tenant or isSuper
+    const row = db.prepare('SELECT * FROM system_backups WHERE id = ?').get(id) as any;
+    if (!row) {
+      return res.status(404).json({ error: 'NotFound', message: 'Arsip backup tidak ditemukan.' });
+    }
+
+    if (!isSuper && row.business_id !== req.businessId) {
+      return res.status(403).json({ error: 'Forbidden', message: 'Akses ditolak: Anda tidak memiliki wewenang untuk memulihkan cadangan bisnis lain.' });
+    }
+
+    const restoreResult = await backupService.restoreTenantBackup(id, req.businessId!, dryRun, req.auth!.userName);
+
+    if (!restoreResult.success) {
+      return res.status(400).json(restoreResult);
+    }
+
+    return res.json({
+      message: dryRun
+        ? 'Simulasi pemulihan (Dry-Run) berhasil. Struktur dan checksum data valid 100%.'
+        : 'Pemulihan data berhasil diterapkan ke basis data bisnis.',
+      ...restoreResult,
+    });
+  } catch (err: any) {
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'ServerError', errorId: rec.errorId, message: err.message });
+  }
+});
+
+// 5. Trigger Automated Retention Pruner
+apiRouter.post('/system/backup/prune', authenticate, requireRole(['Administrator'], 'create'), async (req: Request, res: Response) => {
+  try {
+    const result = await backupService.pruneExpiredBackups();
+    return res.json({
+      success: true,
+      message: `Proses rotasi retensi selesai. ${result.prunedCount} arsip kadaluarsa dibersihkan.`,
+      ...result,
+    });
+  } catch (err: any) {
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'ServerError', errorId: rec.errorId, message: 'Gagal menjalankan pembersihan retensi.' });
+  }
+});
+
+// 6. Disaster Recovery Status & Metrics
+apiRouter.get('/system/disaster-recovery', authenticate, requireRole(['Administrator'], 'view'), (req: Request, res: Response) => {
+  try {
+    const drStatus = backupService.getDisasterRecoveryStatus();
+    return res.json(drStatus);
+  } catch (err: any) {
+    const rec = recordError(err, req);
+    return res.status(500).json({ error: 'ServerError', errorId: rec.errorId, message: 'Gagal mengambil metrik Disaster Recovery.' });
+  }
+});
+

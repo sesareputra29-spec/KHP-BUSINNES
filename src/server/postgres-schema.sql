@@ -361,4 +361,28 @@ CREATE INDEX IF NOT EXISTS idx_err_logs_err_id ON error_logs(error_id);
 CREATE INDEX IF NOT EXISTS idx_err_logs_time ON error_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_err_logs_biz ON error_logs(business_id);
 
+-- 24. System Backups (Automated & Manual Snapshots)
+CREATE TABLE IF NOT EXISTS system_backups (
+  id VARCHAR(64) PRIMARY KEY,
+  scope VARCHAR(32) NOT NULL,
+  business_id VARCHAR(64) REFERENCES businesses(id) ON DELETE CASCADE,
+  business_name VARCHAR(255),
+  version VARCHAR(32) NOT NULL,
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  checksum_sha256 VARCHAR(64) NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  tables_json JSONB NOT NULL,
+  record_counts_json JSONB NOT NULL,
+  encrypted INT NOT NULL DEFAULT 1,
+  storage_location VARCHAR(255) NOT NULL,
+  retention_expires_at TIMESTAMPTZ NOT NULL,
+  triggered_by VARCHAR(255) NOT NULL,
+  trigger_type VARCHAR(32) NOT NULL,
+  status VARCHAR(32) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_backups_biz ON system_backups(business_id);
+CREATE INDEX IF NOT EXISTS idx_backups_time ON system_backups(timestamp);
+CREATE INDEX IF NOT EXISTS idx_backups_retention ON system_backups(retention_expires_at);
+
+
 

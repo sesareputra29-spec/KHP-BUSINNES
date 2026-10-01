@@ -35,7 +35,7 @@ import { Business, SaaSPlan, SaaSSubscription, AdminAuditLog, PlatformOverviewSt
 
 export const SuperAdminDashboard: React.FC = () => {
   const { logout, setIsSuperAdminPortalOpen, showToast, setCurrentTenantId } = useApp();
-  const [activeTab, setActiveTab] = useState<'overview' | 'businesses' | 'plans' | 'subscriptions' | 'audit_logs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'businesses' | 'plans' | 'subscriptions' | 'invoices' | 'audit_logs'>('overview');
   const [isLoading, setIsLoading] = useState(true);
 
   // Data states
@@ -43,6 +43,7 @@ export const SuperAdminDashboard: React.FC = () => {
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [plans, setPlans] = useState<SaaSPlan[]>([]);
   const [subscriptions, setSubscriptions] = useState<SaaSSubscription[]>([]);
+  const [invoices, setInvoices] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>([]);
 
   // Search & Filter
@@ -70,12 +71,13 @@ export const SuperAdminDashboard: React.FC = () => {
   const loadAllAdminData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [ov, bizList, planList, subList, logs] = await Promise.all([
+      const [ov, bizList, planList, subList, logs, invList] = await Promise.all([
         api.getAdminOverview().catch(() => null),
         api.getAdminBusinesses().catch(() => []),
         api.getAdminPlans().catch(() => []),
         api.getAdminSubscriptions().catch(() => []),
         api.getAdminAuditLogs().catch(() => []),
+        api.getAdminInvoices().catch(() => []),
       ]);
 
       if (ov) setOverview(ov);
@@ -83,6 +85,7 @@ export const SuperAdminDashboard: React.FC = () => {
       setPlans(planList);
       setSubscriptions(subList);
       setAuditLogs(logs);
+      setInvoices(invList);
     } catch (err: any) {
       showToast('Gagal Memuat Data', err.message, 'error');
     } finally {
@@ -105,6 +108,62 @@ export const SuperAdminDashboard: React.FC = () => {
       }
     } catch (err: any) {
       showToast('Gagal Update Status', err.message, 'error');
+    }
+  };
+
+  const handleSuspendBusiness = async (id: string, name: string) => {
+    const reason = window.prompt(`Alasan penangguhan (suspend) untuk ${name}:`, 'Pelanggaran ketentuan atau permohonan admin');
+    if (reason === null) return;
+    try {
+      const res = await api.suspendAdminBusiness(id, reason);
+      showToast('Bisnis Ditangguhkan', res.message, 'success');
+      loadAllAdminData();
+      if (isDetailsModalOpen) {
+        const refreshed = await api.getAdminBusiness(id);
+        setSelectedBusiness(refreshed);
+      }
+    } catch (err: any) {
+      showToast('Gagal Menangguhkan', err.message, 'error');
+    }
+  };
+
+  const handleActivateBusiness = async (id: string, name: string) => {
+    if (!window.confirm(`Aktifkan kembali akses penuh untuk bisnis ${name}?`)) return;
+    try {
+      const res = await api.activateAdminBusiness(id);
+      showToast('Bisnis Diaktifkan', res.message, 'success');
+      loadAllAdminData();
+      if (isDetailsModalOpen) {
+        const refreshed = await api.getAdminBusiness(id);
+        setSelectedBusiness(refreshed);
+      }
+    } catch (err: any) {
+      showToast('Gagal Mengaktifkan', err.message, 'error');
+    }
+  };
+
+  const handleArchiveBusiness = async (id: string, name: string) => {
+    const cleanCode = `ARCHIVE-${name.toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
+    const code = window.prompt(`PERINGATAN: Pengarsipan akan menonaktifkan akun secara aman tanpa menghapus riwayat audit.\n\nKetik "${cleanCode}" untuk konfirmasi:`);
+    if (!code) return;
+    try {
+      const res = await api.archiveAdminBusiness(id, code);
+      showToast('Bisnis Diarsipkan', res.message, 'success');
+      loadAllAdminData();
+      setIsDetailsModalOpen(false);
+    } catch (err: any) {
+      showToast('Gagal Mengarsipkan', err.message, 'error');
+    }
+  };
+
+  const handleResetUserPassword = async (userId: string, userName: string) => {
+    const newPassword = window.prompt(`Masukkan password baru untuk ${userName} (minimal 8 karakter):`, 'Admin123!@#');
+    if (!newPassword) return;
+    try {
+      const res = await api.adminResetUserPassword(userId, newPassword);
+      showToast('Password Berhasil Direset', res.message, 'success');
+    } catch (err: any) {
+      showToast('Gagal Reset Password', err.message, 'error');
     }
   };
 

@@ -474,3 +474,6 @@ export function logAudit(
     console.error('[AuditLog] Failed to write log:', err);
   }
 }
+
+export { logAdminAudit } from './audit';
+
