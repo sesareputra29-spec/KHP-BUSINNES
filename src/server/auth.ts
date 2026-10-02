@@ -58,19 +58,22 @@ export async function invalidateSession(token: string): Promise<void> {
 }
 
 export async function authenticate(req: Request, res: Response, next: NextFunction) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({
-      error: 'Unauthorized',
-      message: 'Token otentikasi tidak ditemukan. Harap masuk terlebih dahulu.',
-    });
+  let token: string | null = null;
+  const authHeader = req.headers.authorization || (req.headers['authorization'] as string);
+  if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
+    token = authHeader.substring(7).trim();
+  } else if (req.headers['x-auth-token'] && typeof req.headers['x-auth-token'] === 'string') {
+    token = req.headers['x-auth-token'].trim();
+  } else if (req.headers['x-access-token'] && typeof req.headers['x-access-token'] === 'string') {
+    token = req.headers['x-access-token'].trim();
+  } else if (req.query?.token && typeof req.query.token === 'string') {
+    token = req.query.token.trim();
   }
 
-  const token = authHeader.substring(7).trim();
   if (!token) {
     return res.status(401).json({
       error: 'Unauthorized',
-      message: 'Token otentikasi kosong.',
+      message: 'Token otentikasi tidak ditemukan. Harap masuk terlebih dahulu.',
     });
   }
 

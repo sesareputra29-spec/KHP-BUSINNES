@@ -39,6 +39,19 @@ const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 // ============================================================================
 let pgPoolInstance: Pool | null = null;
 
+export function safeParseJson<T = any>(val: any, fallback: T = {} as T): T {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'object') return val as T;
+  if (typeof val === 'string') {
+    try {
+      return JSON.parse(val) as T;
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
 export function getPgPool(): Pool | null {
   if (!process.env.DATABASE_URL) return null;
   if (!pgPoolInstance) {

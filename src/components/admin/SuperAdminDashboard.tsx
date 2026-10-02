@@ -33,15 +33,85 @@ import { api } from '../../services/api';
 import { useApp } from '../../context/AppContext';
 import { Business, SaaSPlan, SaaSSubscription, AdminAuditLog, PlatformOverviewStats } from '../../types';
 
+const DEFAULT_FALLBACK_PLANS: SaaSPlan[] = [
+  {
+    id: 'plan_starter',
+    code: 'STARTER',
+    name: 'Starter UMKM',
+    description: 'Cocok untuk usaha mikro & rintisan produksi mandiri.',
+    priceMonthly: 99000,
+    priceYearly: 990000,
+    billingPeriod: 'MONTHLY',
+    trialDays: 14,
+    isActive: true,
+    features: ['HPP', 'BOM', 'INVENTORY', 'EXPORT'],
+    limits: { maxProducts: 25, maxRawMaterials: 75, maxBoms: 25, maxUsers: 3, maxBatchesMonthly: 50, maxStorageMb: 250 },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    id: 'plan_business_pro',
+    code: 'PRO',
+    name: 'Business Pro',
+    description: 'Pilihan ideal untuk bisnis berkembang & manufaktur skala menengah.',
+    priceMonthly: 249000,
+    priceYearly: 2490000,
+    billingPeriod: 'MONTHLY',
+    trialDays: 14,
+    isActive: true,
+    features: ['HPP', 'BOM', 'PRODUKSI', 'INVENTORY', 'SUPPLIER', 'PELANGGAN', 'PURCHASE', 'PROFITABILITY', 'REPORT', 'EXPORT', 'MULTI_USER', 'AUDIT_LOG'],
+    limits: { maxProducts: 100, maxRawMaterials: 500, maxBoms: 100, maxUsers: 10, maxBatchesMonthly: 500, maxStorageMb: 1024 },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    id: 'plan_enterprise',
+    code: 'ENTERPRISE',
+    name: 'Enterprise Industrial',
+    description: 'Solusi komprehensif pabrikasi multi-lini & integrasi korporasi.',
+    priceMonthly: 699000,
+    priceYearly: 6990000,
+    billingPeriod: 'MONTHLY',
+    trialDays: 30,
+    isActive: true,
+    features: ['HPP', 'BOM', 'PRODUKSI', 'INVENTORY', 'SUPPLIER', 'PELANGGAN', 'PURCHASE', 'PROFITABILITY', 'REPORT', 'EXPORT', 'MULTI_USER', 'ADVANCED_REPORT', 'API', 'AUDIT_LOG'],
+    limits: { maxProducts: 99999, maxRawMaterials: 99999, maxBoms: 99999, maxUsers: 99999, maxBatchesMonthly: 99999, maxStorageMb: 10240 },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    id: 'plan_free',
+    code: 'FREE',
+    name: 'Free Tier',
+    description: 'Paket gratis untuk eksplorasi awal kalkulator HPP UMKM.',
+    priceMonthly: 0,
+    priceYearly: 0,
+    billingPeriod: 'MONTHLY',
+    trialDays: 0,
+    isActive: true,
+    features: ['HPP', 'BOM'],
+    limits: { maxProducts: 5, maxRawMaterials: 15, maxBoms: 5, maxUsers: 1, maxBatchesMonthly: 10, maxStorageMb: 50 },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
+];
+
 export const SuperAdminDashboard: React.FC = () => {
-  const { logout, setIsSuperAdminPortalOpen, showToast, setCurrentTenantId } = useApp();
+  const { authSession, logout, setIsSuperAdminPortalOpen, showToast, setCurrentTenantId } = useApp();
   const [activeTab, setActiveTab] = useState<'overview' | 'businesses' | 'plans' | 'subscriptions' | 'invoices' | 'audit_logs'>('overview');
   const [isLoading, setIsLoading] = useState(true);
+
+  // Sync token from AppContext authSession into ApiService
+  useEffect(() => {
+    if (authSession?.token) {
+      api.setToken(authSession.token);
+    }
+  }, [authSession?.token]);
 
   // Data states
   const [overview, setOverview] = useState<PlatformOverviewStats | null>(null);
   const [businesses, setBusinesses] = useState<Business[]>([]);
-  const [plans, setPlans] = useState<SaaSPlan[]>([]);
+  const [plans, setPlans] = useState<SaaSPlan[]>(DEFAULT_FALLBACK_PLANS);
   const [subscriptions, setSubscriptions] = useState<SaaSSubscription[]>([]);
   const [invoices, setInvoices] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>([]);
@@ -74,7 +144,18 @@ export const SuperAdminDashboard: React.FC = () => {
       const [ov, bizList, planList, subList, logs, invList] = await Promise.all([
         api.getAdminOverview().catch(() => null),
         api.getAdminBusinesses().catch(() => []),
-        api.getAdminPlans().catch(() => []),
+        api.getAdminPlans()
+          .catch(async () => {
+            const pub = await api.getPublicPlans();
+            return pub.map((p) => ({
+              ...p,
+              isActive: true,
+              billingPeriod: (p.billingPeriod === 'YEARLY' ? 'YEARLY' : 'MONTHLY') as 'MONTHLY' | 'YEARLY',
+              features: p.features as any,
+              limits: p.limits as any,
+            }));
+          })
+          .catch(() => DEFAULT_FALLBACK_PLANS),
         api.getAdminSubscriptions().catch(() => []),
         api.getAdminAuditLogs().catch(() => []),
         api.getAdminInvoices().catch(() => []),
@@ -82,7 +163,11 @@ export const SuperAdminDashboard: React.FC = () => {
 
       if (ov) setOverview(ov);
       setBusinesses(bizList);
-      setPlans(planList);
+      if (planList && planList.length > 0) {
+        setPlans(planList);
+      } else {
+        setPlans(DEFAULT_FALLBACK_PLANS);
+      }
       setSubscriptions(subList);
       setAuditLogs(logs);
       setInvoices(invList);

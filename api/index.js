@@ -1465,6 +1465,18 @@ var mockCompanySettingsKaryaLogam = {
 // src/server/db.ts
 var hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 var pgPoolInstance = null;
+function safeParseJson(val, fallback = {}) {
+  if (val === null || val === void 0) return fallback;
+  if (typeof val === "object") return val;
+  if (typeof val === "string") {
+    try {
+      return JSON.parse(val);
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
 function getPgPool() {
   if (!process.env.DATABASE_URL) return null;
   if (!pgPoolInstance) {
@@ -3201,18 +3213,21 @@ async function invalidateSession(token) {
   await dbAdapter.session.invalidate(token);
 }
 async function authenticate(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({
-      error: "Unauthorized",
-      message: "Token otentikasi tidak ditemukan. Harap masuk terlebih dahulu."
-    });
+  let token = null;
+  const authHeader = req.headers.authorization || req.headers["authorization"];
+  if (authHeader && authHeader.toLowerCase().startsWith("bearer ")) {
+    token = authHeader.substring(7).trim();
+  } else if (req.headers["x-auth-token"] && typeof req.headers["x-auth-token"] === "string") {
+    token = req.headers["x-auth-token"].trim();
+  } else if (req.headers["x-access-token"] && typeof req.headers["x-access-token"] === "string") {
+    token = req.headers["x-access-token"].trim();
+  } else if (req.query?.token && typeof req.query.token === "string") {
+    token = req.query.token.trim();
   }
-  const token = authHeader.substring(7).trim();
   if (!token) {
     return res.status(401).json({
       error: "Unauthorized",
-      message: "Token otentikasi kosong."
+      message: "Token otentikasi tidak ditemukan. Harap masuk terlebih dahulu."
     });
   }
   try {
@@ -6167,7 +6182,7 @@ apiRouter.delete("/users/:id", authenticate, requireRole(["Administrator"], "del
 });
 apiRouter.get("/products", authenticate, async (req, res) => {
   const rows = await dbAdapter.query("SELECT data_json FROM products WHERE business_id = ?", [req.businessId]);
-  return res.json(rows.map((r) => JSON.parse(r.data_json)));
+  return res.json(rows.map((r) => safeParseJson(r.data_json)));
 });
 apiRouter.post("/products", authenticate, enforceSubscriptionAccess, requireResourceLimit("products"), requireRole(["Administrator", "Manager / Owner", "Cost Accountant"], "create"), async (req, res) => {
   try {
@@ -6208,7 +6223,7 @@ apiRouter.put("/products/:id", authenticate, enforceSubscriptionAccess, requireR
   if (!existing) {
     return res.status(404).json({ error: "NotFound", message: "Produk tidak ditemukan dalam bisnis ini." });
   }
-  const current = JSON.parse(existing.data_json);
+  const current = safeParseJson(existing.data_json);
   const updated = {
     ...current,
     ...req.body,
@@ -6235,7 +6250,7 @@ apiRouter.delete("/products/:id", authenticate, enforceSubscriptionAccess, requi
 });
 apiRouter.get("/raw-materials", authenticate, async (req, res) => {
   const rows = await dbAdapter.query("SELECT data_json FROM raw_materials WHERE business_id = ?", [req.businessId]);
-  return res.json(rows.map((r) => JSON.parse(r.data_json)));
+  return res.json(rows.map((r) => safeParseJson(r.data_json)));
 });
 apiRouter.post("/raw-materials", authenticate, enforceSubscriptionAccess, requireResourceLimit("raw_materials"), requireRole(["Administrator", "Manager / Owner", "Cost Accountant", "Inventory Staff"], "create"), async (req, res) => {
   try {
@@ -6277,7 +6292,7 @@ apiRouter.put("/raw-materials/:id", authenticate, enforceSubscriptionAccess, req
   if (!existing) {
     return res.status(404).json({ error: "NotFound", message: "Bahan baku tidak ditemukan." });
   }
-  const current = JSON.parse(existing.data_json);
+  const current = safeParseJson(existing.data_json);
   const updated = {
     ...current,
     ...req.body,
@@ -6305,7 +6320,7 @@ apiRouter.delete("/raw-materials/:id", authenticate, enforceSubscriptionAccess, 
 });
 apiRouter.get("/suppliers", authenticate, async (req, res) => {
   const rows = await dbAdapter.query("SELECT data_json FROM suppliers WHERE business_id = ?", [req.businessId]);
-  return res.json(rows.map((r) => JSON.parse(r.data_json)));
+  return res.json(rows.map((r) => safeParseJson(r.data_json)));
 });
 apiRouter.post("/suppliers", authenticate, enforceSubscriptionAccess, requireRole(["Administrator", "Manager / Owner", "Inventory Staff"], "create"), async (req, res) => {
   const sup = req.body;
@@ -6322,7 +6337,7 @@ apiRouter.put("/suppliers/:id", authenticate, enforceSubscriptionAccess, require
   const { id } = req.params;
   const existing = await dbAdapter.queryOne("SELECT data_json FROM suppliers WHERE id = ? AND business_id = ?", [id, req.businessId]);
   if (!existing) return res.status(404).json({ error: "NotFound" });
-  const updated = { ...JSON.parse(existing.data_json), ...req.body, id, businessId: req.businessId, tenantId: req.businessId };
+  const updated = { ...safeParseJson(existing.data_json), ...req.body, id, businessId: req.businessId, tenantId: req.businessId };
   await dbAdapter.execute(
     "UPDATE suppliers SET code = ?, name = ?, status = ?, data_json = ? WHERE id = ? AND business_id = ?",
     [updated.code, updated.name, updated.status || "Aktif", JSON.stringify(updated), id, req.businessId]
@@ -6337,7 +6352,7 @@ apiRouter.delete("/suppliers/:id", authenticate, enforceSubscriptionAccess, requ
 });
 apiRouter.get("/customers", authenticate, async (req, res) => {
   const rows = await dbAdapter.query("SELECT data_json FROM customers WHERE business_id = ?", [req.businessId]);
-  return res.json(rows.map((r) => JSON.parse(r.data_json)));
+  return res.json(rows.map((r) => safeParseJson(r.data_json)));
 });
 apiRouter.post("/customers", authenticate, enforceSubscriptionAccess, requireRole(["Administrator", "Manager / Owner", "Cost Accountant"], "create"), async (req, res) => {
   const cust = req.body;
@@ -6354,7 +6369,7 @@ apiRouter.put("/customers/:id", authenticate, enforceSubscriptionAccess, require
   const { id } = req.params;
   const existing = await dbAdapter.queryOne("SELECT data_json FROM customers WHERE id = ? AND business_id = ?", [id, req.businessId]);
   if (!existing) return res.status(404).json({ error: "NotFound", message: "Pelanggan tidak ditemukan dalam bisnis ini." });
-  const updated = { ...JSON.parse(existing.data_json), ...req.body, id, businessId: req.businessId, tenantId: req.businessId };
+  const updated = { ...safeParseJson(existing.data_json), ...req.body, id, businessId: req.businessId, tenantId: req.businessId };
   await dbAdapter.execute(
     "UPDATE customers SET code = ?, name = ?, status = ?, data_json = ? WHERE id = ? AND business_id = ?",
     [updated.code, updated.name, updated.status || "Aktif", JSON.stringify(updated), id, req.businessId]
@@ -6369,7 +6384,7 @@ apiRouter.delete("/customers/:id", authenticate, enforceSubscriptionAccess, requ
 });
 apiRouter.get("/categories", authenticate, async (req, res) => {
   const rows = await dbAdapter.query("SELECT data_json FROM categories WHERE business_id = ?", [req.businessId]);
-  return res.json(rows.map((r) => JSON.parse(r.data_json)));
+  return res.json(rows.map((r) => safeParseJson(r.data_json)));
 });
 apiRouter.post("/categories", authenticate, enforceSubscriptionAccess, requireRole(["Administrator", "Manager / Owner"], "create"), async (req, res) => {
   const cat = req.body;
@@ -6385,7 +6400,7 @@ apiRouter.put("/categories/:id", authenticate, enforceSubscriptionAccess, requir
   const { id } = req.params;
   const existing = await dbAdapter.queryOne("SELECT data_json FROM categories WHERE id = ? AND business_id = ?", [id, req.businessId]);
   if (!existing) return res.status(404).json({ error: "NotFound" });
-  const updated = { ...JSON.parse(existing.data_json), ...req.body, id, businessId: req.businessId, tenantId: req.businessId };
+  const updated = { ...safeParseJson(existing.data_json), ...req.body, id, businessId: req.businessId, tenantId: req.businessId };
   await dbAdapter.execute(
     "UPDATE categories SET name = ?, code = ?, type = ?, data_json = ? WHERE id = ? AND business_id = ?",
     [updated.name, updated.code, updated.type, JSON.stringify(updated), id, req.businessId]
@@ -6400,7 +6415,7 @@ apiRouter.delete("/categories/:id", authenticate, enforceSubscriptionAccess, req
 });
 apiRouter.get("/units", authenticate, async (req, res) => {
   const rows = await dbAdapter.query("SELECT data_json FROM units WHERE business_id = ?", [req.businessId]);
-  return res.json(rows.map((r) => JSON.parse(r.data_json)));
+  return res.json(rows.map((r) => safeParseJson(r.data_json)));
 });
 apiRouter.post("/units", authenticate, enforceSubscriptionAccess, requireRole(["Administrator", "Manager / Owner"], "create"), async (req, res) => {
   const unit = req.body;
@@ -6416,7 +6431,7 @@ apiRouter.put("/units/:id", authenticate, enforceSubscriptionAccess, requireRole
   const { id } = req.params;
   const existing = await dbAdapter.queryOne("SELECT data_json FROM units WHERE id = ? AND business_id = ?", [id, req.businessId]);
   if (!existing) return res.status(404).json({ error: "NotFound" });
-  const updated = { ...JSON.parse(existing.data_json), ...req.body, id, businessId: req.businessId, tenantId: req.businessId };
+  const updated = { ...safeParseJson(existing.data_json), ...req.body, id, businessId: req.businessId, tenantId: req.businessId };
   await dbAdapter.execute(
     "UPDATE units SET name = ?, code = ?, data_json = ? WHERE id = ? AND business_id = ?",
     [updated.name, updated.code, JSON.stringify(updated), id, req.businessId]
@@ -6431,7 +6446,7 @@ apiRouter.delete("/units/:id", authenticate, enforceSubscriptionAccess, requireR
 });
 apiRouter.get("/boms", authenticate, requireRole(["Administrator", "Manager / Owner", "Cost Accountant", "Staff", "Viewer"], "view"), async (req, res) => {
   const rows = await dbAdapter.query("SELECT data_json FROM boms WHERE business_id = ?", [req.businessId]);
-  return res.json(rows.map((r) => JSON.parse(r.data_json)));
+  return res.json(rows.map((r) => safeParseJson(r.data_json)));
 });
 apiRouter.post("/boms", authenticate, enforceSubscriptionAccess, requireResourceLimit("boms"), requireRole(["Administrator", "Manager / Owner", "Cost Accountant"], "create"), async (req, res) => {
   const bom = req.body;
@@ -6457,7 +6472,7 @@ apiRouter.put("/boms/:id", authenticate, requireRole(["Administrator", "Manager 
   const existing = await dbAdapter.queryOne("SELECT data_json FROM boms WHERE id = ? AND business_id = ?", [id, req.businessId]);
   if (!existing) return res.status(404).json({ error: "NotFound" });
   const updated = {
-    ...JSON.parse(existing.data_json),
+    ...safeParseJson(existing.data_json),
     ...req.body,
     id,
     businessId: req.businessId,
@@ -6480,7 +6495,7 @@ apiRouter.delete("/boms/:id", authenticate, requireRole(["Administrator", "Manag
 });
 apiRouter.get("/production/batches", authenticate, async (req, res) => {
   const rows = await dbAdapter.query("SELECT data_json FROM production_batches WHERE business_id = ?", [req.businessId]);
-  const batches = rows.map((r) => JSON.parse(r.data_json));
+  const batches = rows.map((r) => safeParseJson(r.data_json));
   batches.sort((a, b) => (b.date || b.startDate || "").localeCompare(a.date || a.startDate || ""));
   return res.json(batches);
 });
@@ -6506,7 +6521,7 @@ apiRouter.put("/production/batches/:id", authenticate, requireRole(["Administrat
   const existing = await dbAdapter.queryOne("SELECT data_json FROM production_batches WHERE id = ? AND business_id = ?", [id, req.businessId]);
   if (!existing) return res.status(404).json({ error: "NotFound" });
   const updated = {
-    ...JSON.parse(existing.data_json),
+    ...safeParseJson(existing.data_json),
     ...req.body,
     id,
     businessId: req.businessId,
@@ -6528,7 +6543,7 @@ apiRouter.delete("/production/batches/:id", authenticate, requireRole(["Administ
 });
 apiRouter.get("/purchases/orders", authenticate, async (req, res) => {
   const rows = await dbAdapter.query("SELECT data_json FROM purchase_orders WHERE business_id = ?", [req.businessId]);
-  const orders = rows.map((r) => JSON.parse(r.data_json));
+  const orders = rows.map((r) => safeParseJson(r.data_json));
   orders.sort((a, b) => (b.orderDate || "").localeCompare(a.orderDate || ""));
   return res.json(orders);
 });
@@ -6549,7 +6564,7 @@ apiRouter.put("/purchases/orders/:id/status", authenticate, requireRole(["Admini
   const { status } = req.body;
   const existing = await dbAdapter.queryOne("SELECT data_json FROM purchase_orders WHERE id = ? AND business_id = ?", [id, req.businessId]);
   if (!existing) return res.status(404).json({ error: "NotFound" });
-  const updated = { ...JSON.parse(existing.data_json), status };
+  const updated = { ...safeParseJson(existing.data_json), status };
   if (status === "Diterima" && !updated.receivedDate) {
     updated.receivedDate = (/* @__PURE__ */ new Date()).toISOString().substring(0, 10);
   }
@@ -6569,7 +6584,7 @@ apiRouter.delete("/purchases/orders/:id", authenticate, requireRole(["Administra
 });
 apiRouter.get("/inventory/movements", authenticate, async (req, res) => {
   const rows = await dbAdapter.query("SELECT data_json FROM stock_movements WHERE business_id = ?", [req.businessId]);
-  const movements = rows.map((r) => JSON.parse(r.data_json));
+  const movements = rows.map((r) => safeParseJson(r.data_json));
   movements.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   return res.json(movements);
 });
@@ -6585,7 +6600,7 @@ apiRouter.post("/inventory/movements", authenticate, requireRole(["Administrator
 });
 apiRouter.get("/activity-logs", authenticate, requireRole(["Administrator", "Manager / Owner"], "view"), async (req, res) => {
   const rows = await dbAdapter.query("SELECT data_json FROM activity_logs WHERE business_id = ?", [req.businessId]);
-  const logs = rows.map((r) => JSON.parse(r.data_json));
+  const logs = rows.map((r) => safeParseJson(r.data_json));
   logs.sort((a, b) => (b.timestamp || "").localeCompare(a.timestamp || ""));
   return res.json(logs.slice(0, 100));
 });
@@ -6599,11 +6614,11 @@ apiRouter.get("/settings/company", authenticate, async (req, res) => {
   if (!row) {
     return res.json({ companyName: "Bisnis Saya", costingMethod: "FULL_COSTING" });
   }
-  return res.json(JSON.parse(row.data_json));
+  return res.json(safeParseJson(row.data_json));
 });
 apiRouter.put("/settings/company", authenticate, requireRole(["Administrator", "Manager / Owner"], "edit"), async (req, res) => {
   const existing = await dbAdapter.queryOne("SELECT data_json FROM company_settings WHERE business_id = ?", [req.businessId]);
-  const current = existing ? JSON.parse(existing.data_json) : {};
+  const current = existing ? safeParseJson(existing.data_json) : {};
   const updated = { ...current, ...req.body };
   await dbAdapter.execute(`
     INSERT INTO company_settings (business_id, company_name, data_json)
@@ -6619,15 +6634,15 @@ apiRouter.get("/system/export-json", authenticate, requireRole(["Administrator",
   const bId = req.businessId;
   const getRows = async (table) => {
     const rows = await dbAdapter.query(`SELECT data_json FROM ${table} WHERE business_id = ?`, [bId]);
-    return rows.map((r) => JSON.parse(r.data_json));
+    return rows.map((r) => safeParseJson(r.data_json));
   };
   const bizRow = await dbAdapter.queryOne("SELECT data_json FROM businesses WHERE id = ?", [bId]);
   const settingsRow = await dbAdapter.queryOne("SELECT data_json FROM company_settings WHERE business_id = ?", [bId]);
   const exportPayload = {
     version: "2.0.0-saas-sql",
     exportDate: (/* @__PURE__ */ new Date()).toISOString(),
-    business: bizRow ? JSON.parse(bizRow.data_json) : null,
-    companySettings: settingsRow ? JSON.parse(settingsRow.data_json) : null,
+    business: bizRow ? safeParseJson(bizRow.data_json) : null,
+    companySettings: settingsRow ? safeParseJson(settingsRow.data_json) : null,
     categories: await getRows("categories"),
     units: await getRows("units"),
     suppliers: await getRows("suppliers"),
@@ -7004,7 +7019,7 @@ apiRouter.get("/admin/businesses/:id", authenticate, requireSuperAdmin, async (r
     ORDER BY s.created_at DESC LIMIT 1
   `, [id]);
   const userRows = await dbAdapter.query("SELECT data_json FROM users WHERE business_id = ? ORDER BY created_at ASC", [id]);
-  const users = userRows.map((u) => JSON.parse(u.data_json));
+  const users = userRows.map((u) => safeParseJson(u.data_json));
   const productCountRes = await dbAdapter.queryOne("SELECT COUNT(*) as count FROM products WHERE business_id = ?", [id]);
   const materialCountRes = await dbAdapter.queryOne("SELECT COUNT(*) as count FROM raw_materials WHERE business_id = ?", [id]);
   const bomCountRes = await dbAdapter.queryOne("SELECT COUNT(*) as count FROM boms WHERE business_id = ?", [id]);
@@ -7041,11 +7056,11 @@ apiRouter.get("/admin/businesses/:id", authenticate, requireSuperAdmin, async (r
   });
   const lastActivity = recentActivities[0] || null;
   return res.json({
-    business: JSON.parse(bizRow.data_json),
+    business: safeParseJson(bizRow.data_json),
     subscription: subRow ? {
       ...subRow,
-      features: JSON.parse(subRow.features_json || "[]"),
-      limits: JSON.parse(subRow.limits_json || "{}")
+      features: safeParseJson(subRow.features_json, []),
+      limits: safeParseJson(subRow.limits_json, {})
     } : null,
     users,
     invoices,
@@ -7254,8 +7269,8 @@ apiRouter.get("/admin/plans", authenticate, requireSuperAdmin, async (req, res) 
     billingPeriod: r.billing_period,
     trialDays: r.trial_days,
     isActive: Boolean(r.is_active),
-    features: JSON.parse(r.features_json),
-    limits: JSON.parse(r.limits_json),
+    features: safeParseJson(r.features_json, []),
+    limits: safeParseJson(r.limits_json, {}),
     createdAt: r.created_at,
     updatedAt: r.updated_at
   }));
@@ -7364,7 +7379,7 @@ apiRouter.get("/admin/audit-logs", authenticate, requireSuperAdmin, async (req, 
     targetType: r.target_type,
     targetId: r.target_id,
     timestamp: r.timestamp,
-    metadata: r.metadata_json ? JSON.parse(r.metadata_json) : null,
+    metadata: safeParseJson(r.metadata_json, null),
     ...r
   })));
 });
@@ -7501,7 +7516,7 @@ apiRouter.post("/onboarding/create-business", authenticate, requireRole(["Admini
     if (!bizRow) {
       return res.status(404).json({ error: "NotFound", message: "Data bisnis tidak ditemukan." });
     }
-    const currentObj = JSON.parse(bizRow.data_json);
+    const currentObj = safeParseJson(bizRow.data_json);
     const logoText = name.split(" ").slice(0, 3).map((w) => w[0]?.toUpperCase()).join("") || "BIZ";
     const updatedObj = {
       ...currentObj,
@@ -7523,7 +7538,7 @@ apiRouter.post("/onboarding/create-business", authenticate, requireRole(["Admini
     `, [name.trim(), logoText, businessType, businessType, JSON.stringify(updatedObj), req.businessId]);
     const setRow = await dbAdapter.queryOne("SELECT data_json FROM company_settings WHERE business_id = ?", [req.businessId]);
     if (setRow) {
-      const setObj = JSON.parse(setRow.data_json);
+      const setObj = safeParseJson(setRow.data_json);
       setObj.companyName = name.trim();
       setObj.businessType = businessType;
       setObj.address = address;
@@ -7566,7 +7581,7 @@ apiRouter.get("/onboarding/status", authenticate, async (req, res) => {
       businessType: bizRow.business_type || "F&B / Kuliner",
       status: bizRow.onboarding_status || "NOT_STARTED",
       currentStep: bizRow.onboarding_step || 1,
-      savedData: bizRow.onboarding_data_json ? JSON.parse(bizRow.onboarding_data_json) : null,
+      savedData: safeParseJson(bizRow.onboarding_data_json, null),
       counts: {
         products: productCount,
         rawMaterials: rawMaterialCount,

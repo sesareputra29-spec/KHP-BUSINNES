@@ -232,7 +232,7 @@ export async function runProductionTestSuite() {
     });
 
     let superAdminToken = '';
-    await runTest('AUTH', '1.8 Autentikasi Platform Super Admin', async () => {
+    await runTest('AUTH', '1.8 Autentikasi Platform Super Admin & Pengambilan Daftar Paket', async () => {
       const res = await request('/api/auth/login', {
         method: 'POST',
         body: { identifier: 'superadmin@hppsaas.com', password: 'SuperAdmin123!' },
@@ -240,6 +240,17 @@ export async function runProductionTestSuite() {
       assertEqual(res.status, 200, 'Super Admin login harus sukses');
       assert(res.body.isSuperAdmin, 'Flag isSuperAdmin harus bernilai true');
       superAdminToken = res.body.token;
+
+      // Verifikasi endpoint /api/admin/plans dengan token Super Admin
+      const plansRes = await request('/api/admin/plans', { token: superAdminToken });
+      assertEqual(plansRes.status, 200, 'Super Admin harus dapat mengambil data paket');
+      assert(Array.isArray(plansRes.body), 'Daftar paket harus berupa array');
+      assert(plansRes.body.length > 0, 'Harus ada paket yang tersedia');
+
+      // Verifikasi endpoint publik paket /api/public/plans
+      const pubPlansRes = await request('/api/public/plans');
+      assertEqual(pubPlansRes.status, 200, 'Endpoint /api/public/plans harus sukses');
+      assert(Array.isArray(pubPlansRes.body), 'Daftar paket publik harus berupa array');
     });
 
     let adminCreatedBizId = '';

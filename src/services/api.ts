@@ -25,21 +25,50 @@ class ApiService {
   private token: string | null = null;
 
   constructor() {
-    this.token = localStorage.getItem(TOKEN_KEY) || null;
+    this.token = this.getToken();
   }
 
   public setToken(token: string | null) {
     this.token = token;
-    if (token) {
-      localStorage.setItem(TOKEN_KEY, token);
-    } else {
-      localStorage.removeItem(TOKEN_KEY);
+    try {
+      if (typeof window !== 'undefined') {
+        if (token) {
+          localStorage.setItem(TOKEN_KEY, token);
+          localStorage.setItem('auth_token', token);
+          sessionStorage.setItem(TOKEN_KEY, token);
+        } else {
+          localStorage.removeItem(TOKEN_KEY);
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('token');
+          localStorage.removeItem('access_token');
+          sessionStorage.removeItem(TOKEN_KEY);
+          sessionStorage.removeItem('auth_token');
+          sessionStorage.removeItem('token');
+        }
+      }
+    } catch {
+      // Safe fallback in sandboxed iframe or private mode
     }
   }
 
   public getToken(): string | null {
-    if (!this.token) {
-      this.token = localStorage.getItem(TOKEN_KEY);
+    if (this.token) return this.token;
+    try {
+      if (typeof window !== 'undefined') {
+        const stored =
+          localStorage.getItem(TOKEN_KEY) ||
+          localStorage.getItem('auth_token') ||
+          localStorage.getItem('token') ||
+          sessionStorage.getItem(TOKEN_KEY) ||
+          sessionStorage.getItem('auth_token') ||
+          sessionStorage.getItem('token');
+        if (stored) {
+          this.token = stored;
+          return stored;
+        }
+      }
+    } catch {
+      // Fallback to in-memory token
     }
     return this.token;
   }
@@ -51,6 +80,7 @@ class ApiService {
     const token = this.getToken();
     if (token) {
       headers.set('Authorization', `Bearer ${token}`);
+      headers.set('x-auth-token', token);
     }
 
     const response = await fetch(endpoint, {
@@ -59,8 +89,10 @@ class ApiService {
     });
 
     if (response.status === 401) {
-      // Clear token on unauthorized / expired session
-      this.setToken(null);
+      // Only clear token if session verification endpoint explicitly fails with 401
+      if (endpoint === '/api/auth/me') {
+        this.setToken(null);
+      }
     }
 
     const contentType = response.headers.get('content-type');
