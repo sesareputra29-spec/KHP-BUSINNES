@@ -1,9 +1,11 @@
 -- ============================================================================
--- POSTGRESQL PRODUCTION DDL SCHEMA FOR VERCEL DEPLOYMENT
--- Target: Neon, Supabase, Vercel Postgres, AWS RDS, or Cloud SQL
+-- POSTGRESQL PRODUCTION DDL SCHEMA & IDEMPOTENT MIGRATION
+-- Application: Kalkulator HPP SaaS Fullstack Platform
+-- Target: Neon, Supabase, Vercel Postgres, AWS RDS, Cloud SQL
+-- Safety Guarantee: Non-Destructive, No DROP TABLE, 100% Idempotent
 -- ============================================================================
 
--- 1. Businesses / Multi-tenant Tenants
+-- 1. Businesses (Multi-tenant isolation root)
 CREATE TABLE IF NOT EXISTS businesses (
   id VARCHAR(64) PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
@@ -21,7 +23,7 @@ CREATE TABLE IF NOT EXISTS businesses (
   data_json JSONB NOT NULL
 );
 
--- 2. Users
+-- 2. Users (Authentication & Tenant Staff)
 CREATE TABLE IF NOT EXISTS users (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -54,7 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_business ON sessions(business_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
--- 4. Categories
+-- 4. Categories (Product & Material Categorization)
 CREATE TABLE IF NOT EXISTS categories (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -66,7 +68,7 @@ CREATE TABLE IF NOT EXISTS categories (
 CREATE INDEX IF NOT EXISTS idx_categories_biz ON categories(business_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_categories_biz_code ON categories(business_id, code, type);
 
--- 5. Units (UOM)
+-- 5. Units (Unit of Measure - UOM)
 CREATE TABLE IF NOT EXISTS units (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -77,7 +79,7 @@ CREATE TABLE IF NOT EXISTS units (
 CREATE INDEX IF NOT EXISTS idx_units_biz ON units(business_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_units_biz_code ON units(business_id, code);
 
--- 6. Suppliers
+-- 6. Suppliers (Vendor Master)
 CREATE TABLE IF NOT EXISTS suppliers (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -101,7 +103,7 @@ CREATE TABLE IF NOT EXISTS customers (
 CREATE INDEX IF NOT EXISTS idx_customers_biz ON customers(business_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_biz_code ON customers(business_id, code);
 
--- 7. Raw Materials
+-- 7. Raw Materials (Master Bahan Baku)
 CREATE TABLE IF NOT EXISTS raw_materials (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -114,7 +116,7 @@ CREATE TABLE IF NOT EXISTS raw_materials (
 CREATE INDEX IF NOT EXISTS idx_raw_materials_biz ON raw_materials(business_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_materials_biz_code ON raw_materials(business_id, code);
 
--- 8. Products
+-- 8. Products (Master Produk Jadi & Katalog)
 CREATE TABLE IF NOT EXISTS products (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -127,7 +129,7 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE INDEX IF NOT EXISTS idx_products_biz ON products(business_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_products_biz_sku ON products(business_id, sku);
 
--- 9. Bill of Materials (BOM / Recipe)
+-- 9. Bill of Materials (BOM / Recipe & Costing Formula)
 CREATE TABLE IF NOT EXISTS boms (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -139,7 +141,7 @@ CREATE TABLE IF NOT EXISTS boms (
 CREATE INDEX IF NOT EXISTS idx_boms_biz ON boms(business_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_boms_biz_code ON boms(business_id, code);
 
--- 10. Production Batches (SPK Produksi)
+-- 10. Production Batches (Surat Perintah Kerja - SPK)
 CREATE TABLE IF NOT EXISTS production_batches (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -153,7 +155,7 @@ CREATE TABLE IF NOT EXISTS production_batches (
 CREATE INDEX IF NOT EXISTS idx_batches_biz ON production_batches(business_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_batches_biz_num ON production_batches(business_id, batch_number);
 
--- 11. Purchase Orders (PO)
+-- 11. Purchase Orders (PO Pengadaan Bahan)
 CREATE TABLE IF NOT EXISTS purchase_orders (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -166,7 +168,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
 CREATE INDEX IF NOT EXISTS idx_po_biz ON purchase_orders(business_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_po_biz_num ON purchase_orders(business_id, po_number);
 
--- 12. Stock Movements
+-- 12. Stock Movements (Kartu Stok & Pergerakan Barang)
 CREATE TABLE IF NOT EXISTS stock_movements (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -177,7 +179,7 @@ CREATE TABLE IF NOT EXISTS stock_movements (
 );
 CREATE INDEX IF NOT EXISTS idx_stock_movements_biz ON stock_movements(business_id);
 
--- 13. Activity Logs (Audit Trail)
+-- 13. Activity Logs (Audit Trail Operasional Tenant)
 CREATE TABLE IF NOT EXISTS activity_logs (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -189,14 +191,14 @@ CREATE TABLE IF NOT EXISTS activity_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_activity_logs_biz ON activity_logs(business_id);
 
--- 14. Company Settings
+-- 14. Company Settings (Pengaturan Profil Usaha)
 CREATE TABLE IF NOT EXISTS company_settings (
   business_id VARCHAR(64) PRIMARY KEY REFERENCES businesses(id) ON DELETE CASCADE,
   company_name VARCHAR(255) NOT NULL,
   data_json JSONB NOT NULL
 );
 
--- 15. SaaS Plans
+-- 15. SaaS Plans (Tiering Paket Komersial)
 CREATE TABLE IF NOT EXISTS plans (
   id VARCHAR(64) PRIMARY KEY,
   code VARCHAR(64) UNIQUE NOT NULL,
@@ -213,7 +215,7 @@ CREATE TABLE IF NOT EXISTS plans (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 16. Subscriptions
+-- 16. Subscriptions (Status Berlangganan Tenant)
 CREATE TABLE IF NOT EXISTS subscriptions (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -225,6 +227,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   trial_start TIMESTAMPTZ,
   trial_end TIMESTAMPTZ,
   is_read_only BOOLEAN NOT NULL DEFAULT FALSE,
+  payment_reference VARCHAR(128),
   notes TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -232,7 +235,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 CREATE INDEX IF NOT EXISTS idx_subs_biz ON subscriptions(business_id);
 CREATE INDEX IF NOT EXISTS idx_subs_plan ON subscriptions(plan_id);
 
--- 17. Invitations
+-- 17. Invitations (Undangan Staf/Tim)
 CREATE TABLE IF NOT EXISTS invitations (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -247,7 +250,7 @@ CREATE TABLE IF NOT EXISTS invitations (
 CREATE INDEX IF NOT EXISTS idx_invitations_biz ON invitations(business_id);
 CREATE INDEX IF NOT EXISTS idx_invitations_token ON invitations(token);
 
--- 18. Admin Audit Logs
+-- 18. Admin Audit Logs (Log Khusus Super Admin & Platform)
 CREATE TABLE IF NOT EXISTS admin_audit_logs (
   id VARCHAR(64) PRIMARY KEY,
   actor_user_id VARCHAR(64) NOT NULL,
@@ -263,7 +266,18 @@ CREATE TABLE IF NOT EXISTS admin_audit_logs (
 CREATE INDEX IF NOT EXISTS idx_admin_logs_biz ON admin_audit_logs(business_id);
 CREATE INDEX IF NOT EXISTS idx_admin_logs_time ON admin_audit_logs(timestamp);
 
--- 19. Invoices
+-- 19. Password Reset Tokens (Token Sekali Pakai)
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token VARCHAR(128) UNIQUE NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_pwd_tokens ON password_reset_tokens(token);
+
+-- 20. Invoices (Faktur Penagihan Langganan)
 CREATE TABLE IF NOT EXISTS invoices (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -281,7 +295,7 @@ CREATE TABLE IF NOT EXISTS invoices (
 );
 CREATE INDEX IF NOT EXISTS idx_invoices_biz ON invoices(business_id);
 
--- 20. Payment Transactions
+-- 21. Payment Transactions (Log Transaksi Gateway)
 CREATE TABLE IF NOT EXISTS payment_transactions (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
@@ -304,7 +318,7 @@ CREATE INDEX IF NOT EXISTS idx_pay_tx_biz ON payment_transactions(business_id);
 CREATE INDEX IF NOT EXISTS idx_pay_tx_inv ON payment_transactions(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_pay_tx_provider ON payment_transactions(provider_tx_id);
 
--- 21. Webhook Events (Idempotency and Audit Trail)
+-- 22. Webhook Events (Idempotency and Audit Trail)
 CREATE TABLE IF NOT EXISTS webhook_events (
   id VARCHAR(64) PRIMARY KEY,
   provider VARCHAR(64) NOT NULL,
@@ -318,7 +332,7 @@ CREATE TABLE IF NOT EXISTS webhook_events (
 CREATE INDEX IF NOT EXISTS idx_webhook_ref ON webhook_events(reference_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_webhook_event ON webhook_events(provider, event_id);
 
--- 22. Security Audit Logs (Security & Admin Activity)
+-- 23. Security Audit Logs (Keamanan & Audit Sistem)
 CREATE TABLE IF NOT EXISTS security_audit_logs (
   id VARCHAR(64) PRIMARY KEY,
   business_id VARCHAR(64) REFERENCES businesses(id) ON DELETE CASCADE,
@@ -340,7 +354,7 @@ CREATE INDEX IF NOT EXISTS idx_sec_logs_action ON security_audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_sec_logs_time ON security_audit_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_sec_logs_user ON security_audit_logs(user_id);
 
--- 23. Centralized Error Logs
+-- 24. Centralized Error Logs (Monitoring Insiden Server)
 CREATE TABLE IF NOT EXISTS error_logs (
   id VARCHAR(64) PRIMARY KEY,
   error_id VARCHAR(64) NOT NULL UNIQUE,
@@ -361,7 +375,7 @@ CREATE INDEX IF NOT EXISTS idx_err_logs_err_id ON error_logs(error_id);
 CREATE INDEX IF NOT EXISTS idx_err_logs_time ON error_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_err_logs_biz ON error_logs(business_id);
 
--- 24. System Backups (Automated & Manual Snapshots)
+-- 25. System Backups (Automated & Manual Snapshots)
 CREATE TABLE IF NOT EXISTS system_backups (
   id VARCHAR(64) PRIMARY KEY,
   scope VARCHAR(32) NOT NULL,
@@ -384,5 +398,92 @@ CREATE INDEX IF NOT EXISTS idx_backups_biz ON system_backups(business_id);
 CREATE INDEX IF NOT EXISTS idx_backups_time ON system_backups(timestamp);
 CREATE INDEX IF NOT EXISTS idx_backups_retention ON system_backups(retention_expires_at);
 
+-- ============================================================================
+-- IDEMPOTENT SEED DATA FOR STANDARD SAAS PLANS & PLATFORM BUSINESS
+-- ============================================================================
 
+-- Seed 1: Platform Business Root
+INSERT INTO businesses (id, name, code, industry, plan, logo_text, status, currency, created_at, data_json)
+VALUES (
+  'platform',
+  'HPP SaaS Platform Admin',
+  'PLATFORM',
+  'Cloud SaaS Management',
+  'BUSINESS',
+  'SAAS',
+  'active',
+  'IDR',
+  NOW(),
+  '{"id": "platform", "name": "HPP SaaS Platform Admin", "code": "PLATFORM", "industry": "Cloud SaaS Management", "plan": "BUSINESS", "logoText": "SAAS", "skuCount": 0, "maxSku": 99999, "status": "active", "currency": "IDR"}'::jsonb
+) ON CONFLICT (id) DO NOTHING;
+
+-- Seed 2: SaaS Plans
+INSERT INTO plans (id, code, name, description, price_monthly, price_yearly, billing_period, trial_days, is_active, features_json, limits_json, created_at, updated_at)
+VALUES
+(
+  'plan_free',
+  'FREE',
+  'Free Tier',
+  'Paket gratis untuk perintis usaha & eksplorasi kalkulasi HPP dasar.',
+  0,
+  0,
+  'MONTHLY',
+  0,
+  TRUE,
+  '["HPP", "BOM", "REPORT"]'::jsonb,
+  '{"maxUsers": 1, "maxProducts": 5, "maxRawMaterials": 10, "maxBoms": 2, "maxBatchesMonthly": 5}'::jsonb,
+  NOW(),
+  NOW()
+),
+(
+  'plan_starter',
+  'STARTER',
+  'Starter UMKM',
+  'Paket esensial untuk bisnis skala kecil yang butuh kontrol bahan baku & SPK.',
+  149000,
+  1490000,
+  'MONTHLY',
+  14,
+  TRUE,
+  '["HPP", "BOM", "PRODUKSI", "INVENTORY", "SUPPLIER", "PURCHASE", "REPORT", "EXPORT"]'::jsonb,
+  '{"maxUsers": 2, "maxProducts": 100, "maxRawMaterials": 50, "maxBoms": 50, "maxBatchesMonthly": 100}'::jsonb,
+  NOW(),
+  NOW()
+),
+(
+  'plan_pro',
+  'PRO',
+  'Business Pro',
+  'Paket terlengkap untuk bisnis berkembang dengan tim produksi & analisis margin mendalam.',
+  399000,
+  3990000,
+  'MONTHLY',
+  14,
+  TRUE,
+  '["HPP", "BOM", "PRODUKSI", "INVENTORY", "SUPPLIER", "PURCHASE", "PROFITABILITY", "REPORT", "EXPORT", "API_INTEGRATION"]'::jsonb,
+  '{"maxUsers": 10, "maxProducts": 1000, "maxRawMaterials": 500, "maxBoms": 500, "maxBatchesMonthly": 1000}'::jsonb,
+  NOW(),
+  NOW()
+),
+(
+  'plan_enterprise',
+  'ENTERPRISE',
+  'Enterprise Scale',
+  'Solusi skala korporasi multi-cabang dengan kapasitas tak terbatas & SLA prioritas.',
+  999000,
+  9990000,
+  'MONTHLY',
+  14,
+  TRUE,
+  '["HPP", "BOM", "PRODUKSI", "INVENTORY", "SUPPLIER", "PURCHASE", "PROFITABILITY", "MULTI_OUTLET", "AI_ANALYTICS", "REPORT", "EXPORT", "API_INTEGRATION"]'::jsonb,
+  '{"maxUsers": 9999, "maxProducts": 99999, "maxRawMaterials": 99999, "maxBoms": 99999, "maxBatchesMonthly": 99999}'::jsonb,
+  NOW(),
+  NOW()
+)
+ON CONFLICT (id) DO UPDATE SET
+  price_monthly = EXCLUDED.price_monthly,
+  price_yearly = EXCLUDED.price_yearly,
+  features_json = EXCLUDED.features_json,
+  limits_json = EXCLUDED.limits_json,
+  updated_at = NOW();
 

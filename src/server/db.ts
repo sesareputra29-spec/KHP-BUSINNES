@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { Pool } from 'pg';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -31,25 +32,161 @@ import {
   mockCompanySettingsKaryaLogam,
 } from '../data/tenantSeedData';
 
-const isVercel = Boolean(process.env.VERCEL);
-const DB_DIR = isVercel ? path.resolve('/tmp', 'data') : path.resolve(process.cwd(), 'data');
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true });
+const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
+
+// ============================================================================
+// 1. POSTGRESQL SERVERLESS CONNECTION POOL (SINGLETON)
+// ============================================================================
+let pgPoolInstance: Pool | null = null;
+
+export function getPgPool(): Pool | null {
+  if (!process.env.DATABASE_URL) return null;
+  if (!pgPoolInstance) {
+    const connStr = process.env.DATABASE_URL;
+    const isLocalhost = connStr.includes('localhost') || connStr.includes('127.0.0.1');
+    pgPoolInstance = new Pool({
+      connectionString: connStr,
+      ssl: isLocalhost ? false : { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 10000,
+      connectionTimeoutMillis: 10000,
+    });
+    pgPoolInstance.on('error', (err) => {
+      console.error('[PostgreSQL Pool Error]', err.message);
+    });
+  }
+  return pgPoolInstance;
 }
 
-const DB_PATH = path.resolve(DB_DIR, 'hpp_saas.db');
-export const db = new DatabaseSync(DB_PATH);
+export function isUsingPostgres(): boolean {
+  return Boolean(process.env.DATABASE_URL);
+}
 
-// Enable foreign keys and WAL mode for high performance & reliability
-db.exec('PRAGMA foreign_keys = ON;');
-db.exec('PRAGMA journal_mode = WAL;');
+// Convert SQLite '?' parameter placeholders to PostgreSQL '$1, $2, ...'
+export function convertSqlForPg(sql: string): string {
+  let paramIndex = 1;
+  // Replace '?' that are not inside quotes
+  return sql.replace(/\?/g, () => `$${paramIndex++}`);
+}
 
+// ============================================================================
+// 2. SQLITE LOCAL / IN-MEMORY FALLBACK DRIVER
+// ============================================================================
+let sqliteDb: DatabaseSync;
+
+if (hasDatabaseUrl) {
+  // In PostgreSQL mode: use an ultra-fast in-memory SQLite instance for local caching & synchronous helper queries
+  sqliteDb = new DatabaseSync(':memory:');
+} else {
+  // In Local Development mode: use persistent SQLite file on disk
+  const DB_DIR = path.resolve(process.cwd(), 'data');
+  if (!fs.existsSync(DB_DIR)) {
+    fs.mkdirSync(DB_DIR, { recursive: true });
+  }
+  const DB_PATH = path.resolve(DB_DIR, 'hpp_saas.db');
+  sqliteDb = new DatabaseSync(DB_PATH);
+}
+
+// Enable foreign keys and WAL mode
+sqliteDb.exec('PRAGMA foreign_keys = ON;');
+try {
+  sqliteDb.exec('PRAGMA journal_mode = WAL;');
+} catch {}
+
+// ============================================================================
+// 3. ASYNC DATABASE ADAPTER (DIRECT POSTGRESQL IN PRODUCTION)
+// ============================================================================
+
+export async function dbQuery<T = any>(sql: string, params: any[] = []): Promise<T[]> {
+  const pool = getPgPool();
+  if (pool) {
+    const pgSql = convertSqlForPg(sql);
+    const res = await pool.query(pgSql, params);
+    return res.rows as T[];
+  }
+  const stmt = sqliteDb.prepare(sql);
+  return stmt.all(...params) as T[];
+}
+
+export async function dbQueryOne<T = any>(sql: string, params: any[] = []): Promise<T | null> {
+  const pool = getPgPool();
+  if (pool) {
+    const pgSql = convertSqlForPg(sql);
+    const res = await pool.query(pgSql, params);
+    return (res.rows[0] as T) || null;
+  }
+  const stmt = sqliteDb.prepare(sql);
+  const row = stmt.get(...params) as T;
+  return row || null;
+}
+
+export async function dbExecute(sql: string, params: any[] = []): Promise<{ rowCount: number }> {
+  const pool = getPgPool();
+  if (pool) {
+    const pgSql = convertSqlForPg(sql);
+    const res = await pool.query(pgSql, params);
+    // Also mirror to in-memory sqlite if applicable
+    try {
+      sqliteDb.prepare(sql).run(...params);
+    } catch {}
+    return { rowCount: res.rowCount || 0 };
+  }
+  const stmt = sqliteDb.prepare(sql);
+  stmt.run(...params);
+  return { rowCount: 1 };
+}
+
+// ============================================================================
+// 4. TRANSPARENT COMPATIBILITY PROXY FOR db.prepare(...)
+// ============================================================================
+export const db = {
+  prepare(sql: string) {
+    const stmt = sqliteDb.prepare(sql);
+    return {
+      get(...params: any[]) {
+        return stmt.get(...params);
+      },
+      all(...params: any[]) {
+        return stmt.all(...params);
+      },
+      run(...params: any[]) {
+        const result = stmt.run(...params);
+        // If PostgreSQL is active, asynchronously mirror mutations to ensure persistence
+        const pool = getPgPool();
+        if (pool) {
+          const pgSql = convertSqlForPg(sql);
+          pool.query(pgSql, params).catch((err) => {
+            // Log mutation sync error without crashing sync caller
+            console.error('[PostgreSQL Async Sync Error]', {
+              sql: pgSql,
+              message: err.message,
+            });
+          });
+        }
+        return result;
+      },
+    };
+  },
+  exec(sql: string) {
+    sqliteDb.exec(sql);
+    const pool = getPgPool();
+    if (pool) {
+      pool.query(sql).catch(() => {});
+    }
+  },
+};
+
+// ============================================================================
+// 5. INITIALIZATION & SEED LOGIC
+// ============================================================================
 let isInitialized = false;
 
 export function initDatabase() {
   if (isInitialized) return;
   isInitialized = true;
-  db.exec(`
+
+  // Initialize SQLite schema (for local dev or in-memory cache)
+  sqliteDb.exec(`
     CREATE TABLE IF NOT EXISTS businesses (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -59,6 +196,10 @@ export function initDatabase() {
       logo_text TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'active',
       currency TEXT NOT NULL DEFAULT 'IDR',
+      business_type TEXT DEFAULT 'F&B / Kuliner',
+      onboarding_status TEXT DEFAULT 'NOT_STARTED',
+      onboarding_step INTEGER DEFAULT 1,
+      onboarding_data_json TEXT,
       created_at TEXT NOT NULL,
       data_json TEXT NOT NULL
     );
@@ -73,6 +214,7 @@ export function initDatabase() {
       salt TEXT NOT NULL,
       role TEXT NOT NULL,
       active INTEGER NOT NULL DEFAULT 1,
+      email_verified INTEGER DEFAULT 1,
       last_login TEXT,
       created_at TEXT NOT NULL,
       data_json TEXT NOT NULL
@@ -250,6 +392,7 @@ export function initDatabase() {
       trial_start TEXT,
       trial_end TEXT,
       is_read_only INTEGER NOT NULL DEFAULT 0,
+      payment_reference TEXT,
       notes TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -412,18 +555,47 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_backups_retention ON system_backups(retention_expires_at);
   `);
 
-  // Safe migrations for existing databases: ensure date, order_date, and onboarding columns exist
-  try { db.exec('ALTER TABLE production_batches ADD COLUMN date TEXT;'); } catch {}
-  try { db.exec('ALTER TABLE purchase_orders ADD COLUMN order_date TEXT;'); } catch {}
-  try { db.exec('ALTER TABLE businesses ADD COLUMN business_type TEXT DEFAULT "F&B / Kuliner";'); } catch {}
-  try { db.exec('ALTER TABLE businesses ADD COLUMN onboarding_status TEXT DEFAULT "NOT_STARTED";'); } catch {}
-  try { db.exec('ALTER TABLE businesses ADD COLUMN onboarding_step INTEGER DEFAULT 1;'); } catch {}
-  try { db.exec('ALTER TABLE businesses ADD COLUMN onboarding_data_json TEXT;'); } catch {}
-  try { db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 1;'); } catch {}
-  try { db.exec('ALTER TABLE subscriptions ADD COLUMN payment_reference TEXT;'); } catch {}
-
   ensurePlatformAndPlansSeeded();
   seedIfEmpty();
+
+  // If PostgreSQL is configured, verify and populate in-memory mirror asynchronously
+  if (hasDatabaseUrl) {
+    syncFromPostgres().catch((err) => {
+      console.error('[Database] Failed to initial sync from PostgreSQL:', err.message);
+    });
+  }
+}
+
+async function syncFromPostgres() {
+  const pool = getPgPool();
+  if (!pool) return;
+  try {
+    const bizRes = await pool.query('SELECT * FROM businesses');
+    if (bizRes.rows.length > 0) {
+      for (const b of bizRes.rows) {
+        try {
+          sqliteDb.prepare(`
+            INSERT OR REPLACE INTO businesses (id, name, code, industry, plan, logo_text, status, currency, business_type, onboarding_status, onboarding_step, created_at, data_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(b.id, b.name, b.code, b.industry, b.plan, b.logo_text, b.status, b.currency, b.business_type || 'F&B / Kuliner', b.onboarding_status || 'NOT_STARTED', b.onboarding_step || 1, String(b.created_at), typeof b.data_json === 'string' ? b.data_json : JSON.stringify(b.data_json));
+        } catch {}
+      }
+    }
+
+    const userRes = await pool.query('SELECT * FROM users');
+    if (userRes.rows.length > 0) {
+      for (const u of userRes.rows) {
+        try {
+          sqliteDb.prepare(`
+            INSERT OR REPLACE INTO users (id, business_id, name, username, email, password_hash, salt, role, active, email_verified, last_login, created_at, data_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(u.id, u.business_id, u.name, u.username, u.email, u.password_hash, u.salt, u.role, u.active ? 1 : 0, u.email_verified ? 1 : 0, u.last_login ? String(u.last_login) : null, String(u.created_at), typeof u.data_json === 'string' ? u.data_json : JSON.stringify(u.data_json));
+        } catch {}
+      }
+    }
+  } catch (err: any) {
+    console.warn('[Database] Cold start cache sync from PostgreSQL:', err.message);
+  }
 }
 
 // Auto-initialize tables on module load
@@ -466,7 +638,7 @@ export function logAdminAudit(
 
 function ensurePlatformAndPlansSeeded() {
   // 1. Ensure 'platform' business exists for SUPER_ADMIN
-  const platformBiz = db.prepare('SELECT id FROM businesses WHERE id = ?').get('platform');
+  const platformBiz = sqliteDb.prepare('SELECT id FROM businesses WHERE id = ?').get('platform');
   if (!platformBiz) {
     const now = new Date().toISOString();
     const platformData = {
@@ -482,7 +654,7 @@ function ensurePlatformAndPlansSeeded() {
       currency: 'IDR',
       createdAt: now,
     };
-    db.prepare(`
+    sqliteDb.prepare(`
       INSERT INTO businesses (id, name, code, industry, plan, logo_text, status, currency, created_at, data_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run('platform', platformData.name, platformData.code, platformData.industry, 'BUSINESS', 'SAAS', 'active', 'IDR', now, JSON.stringify(platformData));
@@ -490,7 +662,7 @@ function ensurePlatformAndPlansSeeded() {
 
   // 2. Ensure Super Admin user exists (Credentials configurable via environment variables)
   const superAdminEmail = (process.env.SUPERADMIN_EMAIL || 'superadmin@hppsaas.com').trim().toLowerCase();
-  const superAdminUser = db.prepare('SELECT id FROM users WHERE LOWER(email) = ?').get(superAdminEmail);
+  const superAdminUser = sqliteDb.prepare('SELECT id FROM users WHERE LOWER(email) = ?').get(superAdminEmail);
   if (!superAdminUser) {
     const defaultDevPwd = process.env.NODE_ENV === 'production'
       ? crypto.randomBytes(16).toString('hex')
@@ -513,7 +685,7 @@ function ensurePlatformAndPlansSeeded() {
       createdAt: now,
       lastLogin: now.replace('T', ' ').substring(0, 16),
     };
-    db.prepare(`
+    sqliteDb.prepare(`
       INSERT INTO users (id, business_id, name, username, email, password_hash, salt, role, active, last_login, created_at, data_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run('usr_superadmin', 'platform', userObj.name, userObj.username, userObj.email, pwdHash, salt, 'SUPER_ADMIN', 1, userObj.lastLogin, now, JSON.stringify(userObj));
@@ -521,11 +693,10 @@ function ensurePlatformAndPlansSeeded() {
   }
 
   // 3. Ensure SaaS Plans exist
-  const planCount = (db.prepare('SELECT COUNT(*) as count FROM plans').get() as { count: number }).count;
+  const planCount = (sqliteDb.prepare('SELECT COUNT(*) as count FROM plans').get() as { count: number }).count;
   if (planCount === 0) {
-    console.log('[Database] Seeding standard SaaS Plans & Feature Entitlements...');
     const now = new Date().toISOString();
-    const insertPlan = db.prepare(`
+    const insertPlan = sqliteDb.prepare(`
       INSERT INTO plans (
         id, code, name, description, price_monthly, price_yearly,
         billing_period, trial_days, is_active, features_json, limits_json, created_at, updated_at
@@ -654,7 +825,7 @@ function ensurePlatformAndPlansSeeded() {
   }
 
   // 4. Ensure Subscriptions for existing businesses
-  const subCount = (db.prepare('SELECT COUNT(*) as count FROM subscriptions').get() as { count: number }).count;
+  const subCount = (sqliteDb.prepare('SELECT COUNT(*) as count FROM subscriptions').get() as { count: number }).count;
   if (subCount === 0) {
     const now = new Date();
     const nowIso = now.toISOString();
@@ -662,7 +833,7 @@ function ensurePlatformAndPlansSeeded() {
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const sevenDaysLater = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    const insertSub = db.prepare(`
+    const insertSub = sqliteDb.prepare(`
       INSERT INTO subscriptions (
         id, business_id, plan_id, status, billing_cycle,
         start_date, end_date, trial_start, trial_end, is_read_only, notes, created_at, updated_at
@@ -670,7 +841,7 @@ function ensurePlatformAndPlansSeeded() {
     `);
 
     // tenant-1: PT Boga Rasa Nusantara -> Active Business Pro Subscription
-    const b1 = db.prepare('SELECT id FROM businesses WHERE id = ?').get('tenant-1');
+    const b1 = sqliteDb.prepare('SELECT id FROM businesses WHERE id = ?').get('tenant-1');
     if (b1) {
       insertSub.run(
         'sub_tenant_1',
@@ -690,7 +861,7 @@ function ensurePlatformAndPlansSeeded() {
     }
 
     // tenant-2: CV Karya Logam Mandiri -> Active 14-day Trial on Starter
-    const b2 = db.prepare('SELECT id FROM businesses WHERE id = ?').get('tenant-2');
+    const b2 = sqliteDb.prepare('SELECT id FROM businesses WHERE id = ?').get('tenant-2');
     if (b2) {
       insertSub.run(
         'sub_tenant_2',
@@ -725,7 +896,7 @@ export function verifyPasswordServer(password: string, salt: string, expectedHas
 }
 
 function seedIfEmpty() {
-  const countRow = db.prepare('SELECT COUNT(*) as count FROM businesses').get() as { count: number };
+  const countRow = sqliteDb.prepare('SELECT COUNT(*) as count FROM businesses').get() as { count: number };
   if (countRow && countRow.count > 0) {
     return;
   }
@@ -733,7 +904,7 @@ function seedIfEmpty() {
   console.log('[Database] Seeding initial multi-business data into SQLite relational database...');
 
   // 1. Businesses
-  const insertBusiness = db.prepare(`
+  const insertBusiness = sqliteDb.prepare(`
     INSERT INTO businesses (id, name, code, industry, plan, logo_text, status, currency, created_at, data_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
@@ -754,42 +925,31 @@ function seedIfEmpty() {
   }
 
   // 2. Users
-  const insertUser = db.prepare(`
+  const insertUser = sqliteDb.prepare(`
     INSERT INTO users (id, business_id, name, username, email, password_hash, salt, role, active, last_login, created_at, data_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   for (const u of mockUsers) {
     const salt = generateSaltServer();
-    const defaultPwd = u.role === 'Manager / Owner' ? 'Owner123!' : u.role === 'Staff' ? 'Staff123!' : 'Admin123!';
-    const pwdHash = hashPasswordServer(defaultPwd, salt);
-    const bizId = u.businessId || u.tenantId || 'tenant-1';
-    const userObj = {
-      ...u,
-      businessId: bizId,
-      tenantId: bizId,
-    };
-    delete (userObj as any).passwordHash;
-    delete (userObj as any).salt;
-
-    insertUser.run(
-      u.id,
-      bizId,
-      u.name,
-      u.username,
-      u.email,
-      pwdHash,
-      salt,
-      u.role,
-      u.active ? 1 : 0,
-      u.lastLogin || '',
-      u.createdAt || new Date().toISOString(),
-      JSON.stringify(userObj)
-    );
+    const pwdHash = hashPasswordServer('Password123!', salt);
+    const item = { ...u, businessId: 'tenant-1', tenantId: 'tenant-1' };
+    insertUser.run(u.id, 'tenant-1', u.name, u.email.split('@')[0], u.email, pwdHash, salt, u.role, u.active ? 1 : 0, 1, (u as any).lastLogin || null, (u as any).createdAt || new Date().toISOString(), JSON.stringify(item));
   }
 
+  const saltKarya = generateSaltServer();
+  const pwdHashKarya = hashPasswordServer('Password123!', saltKarya);
+  insertUser.run('usr_karya_owner', 'tenant-2', 'Hendra Gunawan', 'hendra_karya', 'hendra@karyalogam.com', pwdHashKarya, saltKarya, 'Manager / Owner', 1, null, new Date().toISOString(), JSON.stringify({
+    id: 'usr_karya_owner',
+    businessId: 'tenant-2',
+    name: 'Hendra Gunawan',
+    email: 'hendra@karyalogam.com',
+    role: 'Manager / Owner',
+    active: true,
+  }));
+
   // 3. Categories
-  const insertCat = db.prepare(`
+  const insertCat = sqliteDb.prepare(`
     INSERT INTO categories (id, business_id, name, code, type, data_json)
     VALUES (?, ?, ?, ?, ?, ?)
   `);
@@ -803,7 +963,7 @@ function seedIfEmpty() {
   }
 
   // 4. Units
-  const insertUnit = db.prepare(`
+  const insertUnit = sqliteDb.prepare(`
     INSERT INTO units (id, business_id, name, code, data_json)
     VALUES (?, ?, ?, ?, ?)
   `);
@@ -817,7 +977,7 @@ function seedIfEmpty() {
   }
 
   // 5. Suppliers
-  const insertSup = db.prepare(`
+  const insertSup = sqliteDb.prepare(`
     INSERT INTO suppliers (id, business_id, code, name, status, data_json)
     VALUES (?, ?, ?, ?, ?, ?)
   `);
@@ -831,21 +991,21 @@ function seedIfEmpty() {
   }
 
   // 6. Raw Materials
-  const insertMat = db.prepare(`
+  const insertRM = sqliteDb.prepare(`
     INSERT INTO raw_materials (id, business_id, code, name, category_id, status, data_json)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
-  for (const m of mockRawMaterials) {
-    const item = { ...m, businessId: 'tenant-1', tenantId: 'tenant-1' };
-    insertMat.run(m.id, 'tenant-1', m.code, m.name, m.categoryId, m.status, JSON.stringify(item));
+  for (const rm of mockRawMaterials) {
+    const item = { ...rm, businessId: 'tenant-1', tenantId: 'tenant-1' };
+    insertRM.run(rm.id, 'tenant-1', rm.code, rm.name, rm.categoryId, rm.status, JSON.stringify(item));
   }
-  for (const m of mockRawMaterialsKaryaLogam) {
-    const item = { ...m, businessId: 'tenant-2', tenantId: 'tenant-2' };
-    insertMat.run(m.id, 'tenant-2', m.code, m.name, m.categoryId, m.status, JSON.stringify(item));
+  for (const rm of mockRawMaterialsKaryaLogam) {
+    const item = { ...rm, businessId: 'tenant-2', tenantId: 'tenant-2' };
+    insertRM.run(rm.id, 'tenant-2', rm.code, rm.name, rm.categoryId, rm.status, JSON.stringify(item));
   }
 
   // 7. Products
-  const insertProd = db.prepare(`
+  const insertProd = sqliteDb.prepare(`
     INSERT INTO products (id, business_id, sku, name, category_id, status, data_json)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
@@ -859,53 +1019,49 @@ function seedIfEmpty() {
   }
 
   // 8. BOMs
-  const insertBom = db.prepare(`
+  const insertBOM = sqliteDb.prepare(`
     INSERT INTO boms (id, business_id, code, product_id, product_name, data_json)
     VALUES (?, ?, ?, ?, ?, ?)
   `);
   for (const b of mockBOMs) {
     const item = { ...b, businessId: 'tenant-1', tenantId: 'tenant-1' };
-    insertBom.run(b.id, 'tenant-1', b.code, b.productId, b.productName, JSON.stringify(item));
+    insertBOM.run(b.id, 'tenant-1', b.code, b.productId, b.productName, JSON.stringify(item));
   }
   for (const b of mockBOMsKaryaLogam) {
     const item = { ...b, businessId: 'tenant-2', tenantId: 'tenant-2' };
-    insertBom.run(b.id, 'tenant-2', b.code, b.productId, b.productName, JSON.stringify(item));
+    insertBOM.run(b.id, 'tenant-2', b.code, b.productId, b.productName, JSON.stringify(item));
   }
 
   // 9. Production Batches
-  const insertBatch = db.prepare(`
+  const insertBatch = sqliteDb.prepare(`
     INSERT INTO production_batches (id, business_id, batch_number, bom_id, product_id, status, date, data_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   for (const pb of mockProductionBatches) {
     const item = { ...pb, businessId: 'tenant-1', tenantId: 'tenant-1' };
-    const dateVal = (pb as any).date || (pb as any).startDate || '';
-    insertBatch.run(pb.id, 'tenant-1', pb.batchNumber, pb.bomId, pb.productId, pb.status, dateVal, JSON.stringify(item));
+    insertBatch.run(pb.id, 'tenant-1', pb.batchNumber, pb.bomId, pb.productId, pb.status, (pb as any).date || (pb as any).startDate || '', JSON.stringify(item));
   }
   for (const pb of mockBatchesKaryaLogam) {
     const item = { ...pb, businessId: 'tenant-2', tenantId: 'tenant-2' };
-    const dateVal = (pb as any).date || (pb as any).startDate || '';
-    insertBatch.run(pb.id, 'tenant-2', pb.batchNumber, pb.bomId, pb.productId, pb.status, dateVal, JSON.stringify(item));
+    insertBatch.run(pb.id, 'tenant-2', pb.batchNumber, pb.bomId, pb.productId, pb.status, (pb as any).date || (pb as any).startDate || '', JSON.stringify(item));
   }
 
   // 10. Purchase Orders
-  const insertPo = db.prepare(`
+  const insertPO = sqliteDb.prepare(`
     INSERT INTO purchase_orders (id, business_id, po_number, supplier_id, status, order_date, data_json)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   for (const po of mockPurchaseOrders) {
     const item = { ...po, businessId: 'tenant-1', tenantId: 'tenant-1' };
-    const orderDateVal = (po as any).orderDate || (po as any).date || '';
-    insertPo.run(po.id, 'tenant-1', po.poNumber, po.supplierId, po.status, orderDateVal, JSON.stringify(item));
+    insertPO.run(po.id, 'tenant-1', po.poNumber, po.supplierId, po.status, (po as any).orderDate || (po as any).date || '', JSON.stringify(item));
   }
   for (const po of mockPurchaseOrdersKaryaLogam) {
     const item = { ...po, businessId: 'tenant-2', tenantId: 'tenant-2' };
-    const orderDateVal = (po as any).orderDate || (po as any).date || '';
-    insertPo.run(po.id, 'tenant-2', po.poNumber, po.supplierId, po.status, orderDateVal, JSON.stringify(item));
+    insertPO.run(po.id, 'tenant-2', po.poNumber, po.supplierId, po.status, (po as any).orderDate || (po as any).date || '', JSON.stringify(item));
   }
 
   // 11. Stock Movements
-  const insertMovement = db.prepare(`
+  const insertMovement = sqliteDb.prepare(`
     INSERT INTO stock_movements (id, business_id, item_id, type, date, data_json)
     VALUES (?, ?, ?, ?, ?, ?)
   `);
@@ -919,7 +1075,7 @@ function seedIfEmpty() {
   }
 
   // 12. Activity Logs
-  const insertLog = db.prepare(`
+  const insertLog = sqliteDb.prepare(`
     INSERT INTO activity_logs (id, business_id, user_id, action, module, timestamp, data_json)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
@@ -935,7 +1091,7 @@ function seedIfEmpty() {
   }
 
   // 13. Company Settings
-  const insertSettings = db.prepare(`
+  const insertSettings = sqliteDb.prepare(`
     INSERT INTO company_settings (business_id, company_name, data_json)
     VALUES (?, ?, ?)
   `);

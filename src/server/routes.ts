@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { db, hashPasswordServer, generateSaltServer, verifyPasswordServer, logAdminAudit } from './db';
+import { db, hashPasswordServer, generateSaltServer, verifyPasswordServer, logAdminAudit, dbQuery, dbQueryOne, dbExecute, isUsingPostgres } from './db';
 import {
   authenticate,
   requireRole,
@@ -42,12 +42,23 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
     }
 
     const trimmed = String(identifier).trim().toLowerCase();
-    const userRow = db.prepare(`
-      SELECT u.*, b.name as business_name, b.plan as business_plan, b.status as business_status
-      FROM users u
-      JOIN businesses b ON u.business_id = b.id
-      WHERE LOWER(u.email) = ? OR LOWER(u.username) = ?
-    `).get(trimmed, trimmed) as any;
+    let userRow: any = null;
+
+    if (isUsingPostgres()) {
+      userRow = await dbQueryOne(`
+        SELECT u.*, b.name as business_name, b.plan as business_plan, b.status as business_status
+        FROM users u
+        JOIN businesses b ON u.business_id = b.id
+        WHERE LOWER(u.email) = ? OR LOWER(u.username) = ?
+      `, [trimmed, trimmed]);
+    } else {
+      userRow = db.prepare(`
+        SELECT u.*, b.name as business_name, b.plan as business_plan, b.status as business_status
+        FROM users u
+        JOIN businesses b ON u.business_id = b.id
+        WHERE LOWER(u.email) = ? OR LOWER(u.username) = ?
+      `).get(trimmed, trimmed) as any;
+    }
 
     if (!userRow) {
       logSecurityAudit({
@@ -98,10 +109,13 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
 
     // Update last login
     const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    if (isUsingPostgres()) {
+      await dbExecute('UPDATE users SET last_login = ? WHERE id = ?', [nowStr, userRow.id]);
+    }
     db.prepare('UPDATE users SET last_login = ? WHERE id = ?').run(nowStr, userRow.id);
 
-    // Create session in SQLite
-    const token = createSession(userRow.id, userRow.business_id);
+    // Create session in PostgreSQL & SQLite
+    const token = await createSession(userRow.id, userRow.business_id);
 
     // Log Security Audit
     logSecurityAudit({
@@ -129,7 +143,7 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
       req.ip || '127.0.0.1'
     );
 
-    const userObj = JSON.parse(userRow.data_json);
+    const userObj = typeof userRow.data_json === 'string' ? JSON.parse(userRow.data_json) : (userRow.data_json || {});
     userObj.lastLogin = nowStr;
 
     return res.json({
@@ -145,6 +159,7 @@ apiRouter.post('/auth/login', async (req: Request, res: Response) => {
       },
     });
   } catch (err: any) {
+    console.error('[Login Error]', { message: err.message });
     const rec = recordError(err, req);
     return res.status(500).json({
       error: 'ServerError',
@@ -348,7 +363,7 @@ apiRouter.post('/auth/register', async (req: Request, res: Response) => {
       insertUnitStmt.run(u.id, businessId, u.name, u.code, JSON.stringify(u));
     }
 
-    const token = createSession(userId, businessId);
+    const token = await createSession(userId, businessId);
 
     logAudit(
       businessId,
@@ -542,9 +557,9 @@ apiRouter.post('/auth/reset-password', (req: Request, res: Response) => {
   }
 });
 
-apiRouter.post('/auth/logout', authenticate, (req: Request, res: Response) => {
+apiRouter.post('/auth/logout', authenticate, async (req: Request, res: Response) => {
   if (req.auth) {
-    invalidateSession(req.auth.token);
+    await invalidateSession(req.auth.token);
     logSecurityAudit({
       action: 'logout',
       category: 'AUTH',

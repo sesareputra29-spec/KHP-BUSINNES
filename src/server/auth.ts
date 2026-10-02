@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { db, hashPasswordServer, generateSaltServer, verifyPasswordServer } from './db';
+import { db, hashPasswordServer, generateSaltServer, verifyPasswordServer, dbQueryOne, dbExecute, isUsingPostgres } from './db';
 import crypto from 'node:crypto';
 import { UserProfile, FeatureKey, SaaSSubscriptionStatus, PlanLimits } from '../types';
 import {
@@ -49,12 +49,18 @@ declare global {
   }
 }
 
-export function createSession(userId: string, businessId: string, durationDays = 7): string {
+export async function createSession(userId: string, businessId: string, durationDays = 7): Promise<string> {
   // Cryptographically secure 32-byte session token
   const token = `sess_${crypto.randomBytes(32).toString('hex')}`;
   const createdAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
 
+  if (isUsingPostgres()) {
+    await dbExecute(
+      'INSERT INTO sessions (token, user_id, business_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+      [token, userId, businessId, createdAt, expiresAt]
+    );
+  }
   db.prepare(`
     INSERT INTO sessions (token, user_id, business_id, created_at, expires_at)
     VALUES (?, ?, ?, ?, ?)
@@ -63,11 +69,14 @@ export function createSession(userId: string, businessId: string, durationDays =
   return token;
 }
 
-export function invalidateSession(token: string): void {
+export async function invalidateSession(token: string): Promise<void> {
+  if (isUsingPostgres()) {
+    await dbExecute('DELETE FROM sessions WHERE token = ?', [token]);
+  }
   db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
 }
 
-export function authenticate(req: Request, res: Response, next: NextFunction) {
+export async function authenticate(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({
@@ -84,129 +93,176 @@ export function authenticate(req: Request, res: Response, next: NextFunction) {
     });
   }
 
-  const row = db.prepare(`
-    SELECT
-      s.token,
-      s.user_id,
-      s.business_id,
-      s.expires_at,
-      u.name as user_name,
-      u.email as user_email,
-      u.username,
-      u.role as user_role,
-      u.active as user_active,
-      u.data_json as user_data,
-      b.name as business_name,
-      b.plan as business_plan,
-      b.status as business_status
-    FROM sessions s
-    JOIN users u ON s.user_id = u.id
-    JOIN businesses b ON s.business_id = b.id
-    WHERE s.token = ?
-  `).get(token) as any;
-
-  if (!row) {
-    return res.status(401).json({
-      error: 'Unauthorized',
-      message: 'Sesi tidak valid atau telah berakhir.',
-    });
-  }
-
-  // Check expiration
-  if (new Date(row.expires_at) <= new Date()) {
-    invalidateSession(token);
-    return res.status(401).json({
-      error: 'SessionExpired',
-      message: 'Sesi login telah kedaluwarsa. Silakan masuk kembali.',
-    });
-  }
-
-  // Check user active
-  if (!row.user_active) {
-    return res.status(403).json({
-      error: 'Forbidden',
-      message: 'Akun Anda telah dinonaktifkan oleh administrator.',
-    });
-  }
-
-  // Check business suspended
-  if (row.business_status === 'suspended' && row.user_role !== 'SUPER_ADMIN') {
-    return res.status(403).json({
-      error: 'BusinessSuspended',
-      message: 'Akses ditolak: Akun bisnis ini sedang ditangguhkan. Silakan hubungi Administrator.',
-    });
-  }
-
-  const userObj = row.user_data ? JSON.parse(row.user_data) : {};
-
-  // =========================================================================
-  // MULTI-TENANT ISOLATION: USER → MEMBERSHIP → BUSINESS → RESOURCE
-  // Never blindly trust businessId provided by frontend headers or queries.
-  // =========================================================================
-  const requestedBusinessId = (req.headers['x-business-id'] as string) || (req.query.businessId as string);
-
-  let activeBusinessId = row.business_id;
-  let activeBusinessName = row.business_name;
-  let activeBusinessPlan = row.business_plan;
-  let activeUserRole = row.user_role;
-
-  if (requestedBusinessId && requestedBusinessId !== row.business_id) {
-    if (row.user_role === 'SUPER_ADMIN') {
-      // Super Admin has platform-level oversight
-      const targetBiz = db.prepare('SELECT id, name, plan, status FROM businesses WHERE id = ?').get(requestedBusinessId) as any;
-      if (!targetBiz) {
-        return res.status(404).json({ error: 'NotFound', message: 'Bisnis target tidak ditemukan.' });
-      }
-      activeBusinessId = targetBiz.id;
-      activeBusinessName = targetBiz.name;
-      activeBusinessPlan = targetBiz.plan;
+  try {
+    let row: any = null;
+    if (isUsingPostgres()) {
+      row = await dbQueryOne(`
+        SELECT
+          s.token,
+          s.user_id,
+          s.business_id,
+          s.expires_at,
+          u.name as user_name,
+          u.email as user_email,
+          u.username,
+          u.role as user_role,
+          u.active as user_active,
+          u.data_json as user_data,
+          b.name as business_name,
+          b.plan as business_plan,
+          b.status as business_status
+        FROM sessions s
+        JOIN users u ON s.user_id = u.id
+        JOIN businesses b ON s.business_id = b.id
+        WHERE s.token = ?
+      `, [token]);
     } else {
-      // Regular user: Server-side validation of active membership in requested business
-      const membership = db.prepare(`
-        SELECT u.id, u.role, u.active, b.name as business_name, b.plan as business_plan, b.status as business_status
-        FROM users u
-        JOIN businesses b ON u.business_id = b.id
-        WHERE u.business_id = ? AND LOWER(u.email) = ? AND u.active = 1
-      `).get(requestedBusinessId, row.user_email.toLowerCase()) as any;
-
-      if (!membership) {
-        // User A -> Business B: DITOLAK (Strict isolation)
-        return res.status(403).json({
-          error: 'TenantAccessDenied',
-          message: 'Akses ditolak: Anda tidak memiliki keanggotaan (membership) aktif pada bisnis ini.',
-        });
-      }
-
-      if (membership.business_status === 'suspended') {
-        return res.status(403).json({
-          error: 'BusinessSuspended',
-          message: 'Akses ditolak: Bisnis yang diminta sedang ditangguhkan.',
-        });
-      }
-
-      activeBusinessId = requestedBusinessId;
-      activeBusinessName = membership.business_name;
-      activeBusinessPlan = membership.business_plan;
-      activeUserRole = membership.role;
+      row = db.prepare(`
+        SELECT
+          s.token,
+          s.user_id,
+          s.business_id,
+          s.expires_at,
+          u.name as user_name,
+          u.email as user_email,
+          u.username,
+          u.role as user_role,
+          u.active as user_active,
+          u.data_json as user_data,
+          b.name as business_name,
+          b.plan as business_plan,
+          b.status as business_status
+        FROM sessions s
+        JOIN users u ON s.user_id = u.id
+        JOIN businesses b ON s.business_id = b.id
+        WHERE s.token = ?
+      `).get(token) as any;
     }
+
+    if (!row) {
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Sesi tidak valid atau telah berakhir.',
+      });
+    }
+
+    // Check expiration
+    if (new Date(row.expires_at) <= new Date()) {
+      await invalidateSession(token);
+      return res.status(401).json({
+        error: 'SessionExpired',
+        message: 'Sesi login telah kedaluwarsa. Silakan masuk kembali.',
+      });
+    }
+
+    // Check user active
+    if (!row.user_active) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Akun Anda telah dinonaktifkan oleh administrator.',
+      });
+    }
+
+    // Check business suspended
+    if (row.business_status === 'suspended' && row.user_role !== 'SUPER_ADMIN') {
+      return res.status(403).json({
+        error: 'BusinessSuspended',
+        message: 'Akses ditolak: Akun bisnis ini sedang ditangguhkan. Silakan hubungi Administrator.',
+      });
+    }
+
+    const userObj = typeof row.user_data === 'string' ? JSON.parse(row.user_data) : (row.user_data || {});
+
+    // =========================================================================
+    // MULTI-TENANT ISOLATION: USER → MEMBERSHIP → BUSINESS → RESOURCE
+    // Never blindly trust businessId provided by frontend headers or queries.
+    // =========================================================================
+    const requestedBusinessId = (req.headers['x-business-id'] as string) || (req.query.businessId as string);
+
+    let activeBusinessId = row.business_id;
+    let activeBusinessName = row.business_name;
+    let activeBusinessPlan = row.business_plan;
+    let activeUserRole = row.user_role;
+
+    if (requestedBusinessId && requestedBusinessId !== row.business_id) {
+      if (row.user_role === 'SUPER_ADMIN') {
+        // Super Admin has platform-level oversight
+        let targetBiz: any = null;
+        if (isUsingPostgres()) {
+          targetBiz = await dbQueryOne('SELECT id, name, plan, status FROM businesses WHERE id = ?', [requestedBusinessId]);
+        } else {
+          targetBiz = db.prepare('SELECT id, name, plan, status FROM businesses WHERE id = ?').get(requestedBusinessId) as any;
+        }
+        if (!targetBiz) {
+          return res.status(404).json({ error: 'NotFound', message: 'Bisnis target tidak ditemukan.' });
+        }
+        activeBusinessId = targetBiz.id;
+        activeBusinessName = targetBiz.name;
+        activeBusinessPlan = targetBiz.plan;
+      } else {
+        // Regular user: Server-side validation of active membership in requested business
+        let membership: any = null;
+        if (isUsingPostgres()) {
+          membership = await dbQueryOne(`
+            SELECT u.id, u.role, u.active, b.name as business_name, b.plan as business_plan, b.status as business_status
+            FROM users u
+            JOIN businesses b ON u.business_id = b.id
+            WHERE u.business_id = ? AND LOWER(u.email) = ? AND (u.active = 1 OR u.active = true)
+          `, [requestedBusinessId, row.user_email.toLowerCase()]);
+        } else {
+          membership = db.prepare(`
+            SELECT u.id, u.role, u.active, b.name as business_name, b.plan as business_plan, b.status as business_status
+            FROM users u
+            JOIN businesses b ON u.business_id = b.id
+            WHERE u.business_id = ? AND LOWER(u.email) = ? AND u.active = 1
+          `).get(requestedBusinessId, row.user_email.toLowerCase()) as any;
+        }
+
+        if (!membership) {
+          // User A -> Business B: DITOLAK (Strict isolation)
+          return res.status(403).json({
+            error: 'TenantAccessDenied',
+            message: 'Akses ditolak: Anda tidak memiliki keanggotaan (membership) aktif pada bisnis ini.',
+          });
+        }
+
+        if (membership.business_status === 'suspended') {
+          return res.status(403).json({
+            error: 'BusinessSuspended',
+            message: 'Akses ditolak: Bisnis yang diminta sedang ditangguhkan.',
+          });
+        }
+
+        activeBusinessId = requestedBusinessId;
+        activeBusinessName = membership.business_name;
+        activeBusinessPlan = membership.business_plan;
+        activeUserRole = membership.role;
+      }
+    }
+
+    req.auth = {
+      token: row.token,
+      userId: row.user_id,
+      userName: row.user_name,
+      userEmail: row.user_email,
+      userRole: activeUserRole,
+      userAvatar: userObj.avatar || '',
+      userPhone: userObj.phone || '',
+      businessId: activeBusinessId,
+      businessName: activeBusinessName,
+      businessPlan: activeBusinessPlan,
+      isSuperAdmin: row.user_role === 'SUPER_ADMIN',
+    };
+    req.businessId = activeBusinessId;
+
+    next();
+  } catch (err: any) {
+    console.error('[Auth Error Details]', { message: err.message, stack: err.stack });
+    return res.status(500).json({
+      error: 'ServerError',
+      message: 'Terjadi kesalahan sistem saat memverifikasi otentikasi.',
+    });
   }
-
-  req.auth = {
-    token: row.token,
-    userId: row.user_id,
-    userName: row.user_name,
-    userEmail: row.user_email,
-    userRole: activeUserRole,
-    userAvatar: userObj.avatar || '',
-    userPhone: userObj.phone || '',
-    businessId: activeBusinessId,
-    businessName: activeBusinessName,
-    businessPlan: activeBusinessPlan,
-    isSuperAdmin: row.user_role === 'SUPER_ADMIN',
-  };
-  req.businessId = activeBusinessId;
-
-  next();
 }
 
 export function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
