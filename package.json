@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "tsx server.ts",
-    "build": "vite build",
+    "build:client": "vite build",
+    "build:server": "esbuild src/server/app.ts --bundle --platform=node --target=node20 --format=esm --outfile=api/index.js --packages=external",
+    "build": "vite build && esbuild src/server/app.ts --bundle --platform=node --target=node20 --format=esm --outfile=api/index.js --packages=external",
     "preview": "vite preview",
     "db:migrate": "tsx src/server/scripts/migrate-pg.ts",
     "test:prod": "tsx tests/production-suite.ts",
-    "clean": "rm -rf dist server.js",
+    "clean": "rm -rf dist server.js api/index.js",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
