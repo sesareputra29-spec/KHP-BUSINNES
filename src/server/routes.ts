@@ -259,7 +259,7 @@ apiRouter.post('/auth/register', async (req: Request, res: Response) => {
       phone: phone || '',
       active: true,
       createdAt,
-      lastLogin: createdAt.replace('T', ' ').substring(0, 16),
+      lastLogin: null,
     };
 
     const trialStart = new Date();
@@ -780,7 +780,7 @@ apiRouter.post('/users', authenticate, enforceSubscriptionAccess, requireResourc
       phone: phone || '',
       active: active !== false,
       createdAt,
-      lastLogin: '',
+      lastLogin: null,
     };
 
     await dbAdapter.insert('users', {
@@ -794,7 +794,7 @@ apiRouter.post('/users', authenticate, enforceSubscriptionAccess, requireResourc
       role: userObj.role,
       active: userObj.active,
       email_verified: true,
-      last_login: '',
+      last_login: null,
       created_at: createdAt,
       data_json: JSON.stringify(userObj),
     });
@@ -1788,6 +1788,9 @@ apiRouter.post('/admin/businesses', authenticate, requireSuperAdmin, async (req:
       logo_text: logoText,
       status,
       currency: 'IDR',
+      business_type: bizObj.industry,
+      onboarding_status: 'COMPLETED',
+      onboarding_step: 4,
       created_at: now,
       data_json: JSON.stringify(bizObj),
     });
@@ -1804,7 +1807,7 @@ apiRouter.post('/admin/businesses', authenticate, requireSuperAdmin, async (req:
       phone: ownerPhone || '',
       active: true,
       createdAt: now,
-      lastLogin: '',
+      lastLogin: null,
     };
 
     await dbAdapter.insert('users', {
@@ -1817,7 +1820,8 @@ apiRouter.post('/admin/businesses', authenticate, requireSuperAdmin, async (req:
       salt: salt,
       role: 'Administrator',
       active: true,
-      last_login: '',
+      email_verified: true,
+      last_login: null,
       created_at: now,
       data_json: JSON.stringify(userObj),
     });
@@ -1844,6 +1848,54 @@ apiRouter.post('/admin/businesses', authenticate, requireSuperAdmin, async (req:
       created_at: now,
       updated_at: now,
     });
+
+    // Default company settings
+    const initialSettings = {
+      companyName: name,
+      businessType: bizObj.industry,
+      address: '',
+      phone: ownerPhone || '',
+      email: cleanEmail,
+      taxId: '',
+      defaultCurrency: 'IDR (Rp)',
+      costingMethod: 'FULL_COSTING',
+      defaultMarginPct: 35,
+      maxShrinkageTolerancePct: 5,
+      enableOverheads: true,
+      enableLaborTracking: true,
+      currency: 'IDR (Rp)',
+      defaultCostingMethod: 'FULL_COSTING',
+      hppRounding: 100,
+      defaultShrinkagePct: 3,
+      defaultMarginTargetPct: 35,
+      hourlyLaborRateStandard: 25000,
+    };
+    await dbAdapter.insert('company_settings', {
+      business_id: businessId,
+      company_name: name,
+      data_json: JSON.stringify(initialSettings),
+    }, 'ON CONFLICT (business_id) DO UPDATE SET company_name = EXCLUDED.company_name, data_json = EXCLUDED.data_json');
+
+    // Default units
+    const defaultUnits = [
+      { id: `u_${businessId}_1`, code: 'kg', name: 'Kilogram', businessId, tenantId: businessId },
+      { id: `u_${businessId}_2`, code: 'gr', name: 'Gram', businessId, tenantId: businessId },
+      { id: `u_${businessId}_3`, code: 'pcs', name: 'Pieces / Buah', businessId, tenantId: businessId },
+      { id: `u_${businessId}_4`, code: 'l', name: 'Liter', businessId, tenantId: businessId },
+      { id: `u_${businessId}_5`, code: 'ml', name: 'Mililiter', businessId, tenantId: businessId },
+      { id: `u_${businessId}_6`, code: 'box', name: 'Box / Kotak', businessId, tenantId: businessId },
+      { id: `u_${businessId}_7`, code: 'btl', name: 'Botol', businessId, tenantId: businessId },
+      { id: `u_${businessId}_8`, code: 'dus', name: 'Dus', businessId, tenantId: businessId },
+    ];
+    for (const u of defaultUnits) {
+      await dbAdapter.insert('units', {
+        id: u.id,
+        business_id: businessId,
+        name: u.name,
+        code: u.code,
+        data_json: JSON.stringify(u),
+      });
+    }
 
     logAdminAudit(
       req.auth!.userId,

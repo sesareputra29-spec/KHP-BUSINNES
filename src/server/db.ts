@@ -137,7 +137,8 @@ export async function dbQuery<T = any>(sql: string, params: any[] = []): Promise
   const pool = getPgPool();
   if (pool) {
     const pgSql = convertSqlForPg(sql);
-    const res = await pool.query(pgSql, params);
+    const pgParams = params.map((p) => (p === undefined ? null : p));
+    const res = await pool.query(pgSql, pgParams);
     return res.rows as T[];
   }
   const stmt = sqliteDb.prepare(sql);
@@ -148,7 +149,8 @@ export async function dbQueryOne<T = any>(sql: string, params: any[] = []): Prom
   const pool = getPgPool();
   if (pool) {
     const pgSql = convertSqlForPg(sql);
-    const res = await pool.query(pgSql, params);
+    const pgParams = params.map((p) => (p === undefined ? null : p));
+    const res = await pool.query(pgSql, pgParams);
     return (res.rows[0] as T) || null;
   }
   const stmt = sqliteDb.prepare(sql);
@@ -160,7 +162,8 @@ export async function dbExecute(sql: string, params: any[] = []): Promise<{ rowC
   const pool = getPgPool();
   if (pool) {
     const pgSql = convertSqlForPg(sql);
-    const res = await pool.query(pgSql, params);
+    const pgParams = params.map((p) => (p === undefined ? null : p));
+    const res = await pool.query(pgSql, pgParams);
     return { rowCount: res.rowCount || 0 };
   }
   const stmt = sqliteDb.prepare(sql);
@@ -179,15 +182,18 @@ export async function dbTransaction<T>(
       await client.query('BEGIN');
       const executor: TrxExecutor = {
         query: async <R = any>(sql: string, params: any[] = []): Promise<R[]> => {
-          const res = await client.query(convertSqlForPg(sql), params);
+          const pgParams = params.map((p) => (p === undefined ? null : p));
+          const res = await client.query(convertSqlForPg(sql), pgParams);
           return res.rows as R[];
         },
         queryOne: async <R = any>(sql: string, params: any[] = []): Promise<R | null> => {
-          const res = await client.query(convertSqlForPg(sql), params);
+          const pgParams = params.map((p) => (p === undefined ? null : p));
+          const res = await client.query(convertSqlForPg(sql), pgParams);
           return (res.rows[0] as R) || null;
         },
         execute: async (sql: string, params: any[] = []): Promise<{ rowCount: number }> => {
-          const res = await client.query(convertSqlForPg(sql), params);
+          const pgParams = params.map((p) => (p === undefined ? null : p));
+          const res = await client.query(convertSqlForPg(sql), pgParams);
           return { rowCount: res.rowCount || 0 };
         },
       };
@@ -227,6 +233,48 @@ export async function dbTransaction<T>(
   }
 }
 
+// Helper to sanitize column values for PostgreSQL / SQLite
+function sanitizeColumnValue(k: string, rawVal: any): any {
+  let val = rawVal;
+  // Boolean columns
+  if (['active', 'is_active', 'is_read_only', 'email_verified', 'used', 'encrypted'].includes(k)) {
+    if (isUsingPostgres()) {
+      return Boolean(val);
+    }
+    return val ? 1 : 0;
+  }
+
+  // Nullable timestamps: Never send empty string "" to PostgreSQL TIMESTAMPTZ/TIMESTAMP
+  if (['last_login', 'trial_start', 'trial_end', 'paid_at'].includes(k)) {
+    if (val === '' || val === undefined || val === null) {
+      return null;
+    }
+    return val;
+  }
+
+  // Non-nullable / created_at / updated_at timestamps: Never send empty string ""
+  if (['created_at', 'updated_at', 'timestamp', 'processed_at'].includes(k)) {
+    if (val === '' || val === undefined || val === null) {
+      return new Date().toISOString();
+    }
+    return val;
+  }
+
+  // Range and expiry timestamps: If empty string or undefined, use NULL
+  if (['start_date', 'end_date', 'expires_at', 'retention_expires_at'].includes(k)) {
+    if (val === '' || val === undefined) {
+      return null;
+    }
+    return val;
+  }
+
+  if (val === undefined) {
+    return null;
+  }
+
+  return val;
+}
+
 // ============================================================================
 // UNIFIED PRODUCTION DATABASE ADAPTER
 // ============================================================================
@@ -258,16 +306,7 @@ export const dbAdapter = {
   async insert(table: string, data: Record<string, any>, onConflict?: string): Promise<{ rowCount: number }> {
     const keys = Object.keys(data);
     const placeholders = keys.map(() => '?').join(', ');
-    const values = keys.map((k) => {
-      const val = data[k];
-      if (['active', 'is_active', 'is_read_only', 'email_verified', 'used', 'encrypted'].includes(k)) {
-        if (isUsingPostgres()) {
-          return Boolean(val);
-        }
-        return val ? 1 : 0;
-      }
-      return val;
-    });
+    const values = keys.map((k) => sanitizeColumnValue(k, data[k]));
 
     let sql = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`;
     if (onConflict) {
@@ -280,16 +319,7 @@ export const dbAdapter = {
   async update(table: string, data: Record<string, any>, whereClause: string, whereParams: any[] = []): Promise<{ rowCount: number }> {
     const keys = Object.keys(data);
     const setClause = keys.map((k) => `${k} = ?`).join(', ');
-    const values = keys.map((k) => {
-      const val = data[k];
-      if (['active', 'is_active', 'is_read_only', 'email_verified', 'used', 'encrypted'].includes(k)) {
-        if (isUsingPostgres()) {
-          return Boolean(val);
-        }
-        return val ? 1 : 0;
-      }
-      return val;
-    });
+    const values = keys.map((k) => sanitizeColumnValue(k, data[k]));
 
     const sql = `UPDATE ${table} SET ${setClause} WHERE ${whereClause}`;
     return dbExecute(sql, [...values, ...whereParams]);
@@ -375,7 +405,7 @@ export const dbAdapter = {
     },
 
     async updateLastLogin(userId: string, lastLogin?: string): Promise<void> {
-      const ts = lastLogin || new Date().toISOString().replace('T', ' ').substring(0, 16);
+      const ts = (lastLogin && lastLogin.trim() !== '') ? lastLogin : new Date().toISOString();
       await dbExecute('UPDATE users SET last_login = ? WHERE id = ?', [ts, userId]);
     },
 

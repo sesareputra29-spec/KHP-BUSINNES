@@ -1522,7 +1522,8 @@ async function dbQuery(sql, params = []) {
   const pool = getPgPool();
   if (pool) {
     const pgSql = convertSqlForPg(sql);
-    const res = await pool.query(pgSql, params);
+    const pgParams = params.map((p) => p === void 0 ? null : p);
+    const res = await pool.query(pgSql, pgParams);
     return res.rows;
   }
   const stmt = sqliteDb.prepare(sql);
@@ -1532,7 +1533,8 @@ async function dbQueryOne(sql, params = []) {
   const pool = getPgPool();
   if (pool) {
     const pgSql = convertSqlForPg(sql);
-    const res = await pool.query(pgSql, params);
+    const pgParams = params.map((p) => p === void 0 ? null : p);
+    const res = await pool.query(pgSql, pgParams);
     return res.rows[0] || null;
   }
   const stmt = sqliteDb.prepare(sql);
@@ -1543,7 +1545,8 @@ async function dbExecute(sql, params = []) {
   const pool = getPgPool();
   if (pool) {
     const pgSql = convertSqlForPg(sql);
-    const res = await pool.query(pgSql, params);
+    const pgParams = params.map((p) => p === void 0 ? null : p);
+    const res = await pool.query(pgSql, pgParams);
     return { rowCount: res.rowCount || 0 };
   }
   const stmt = sqliteDb.prepare(sql);
@@ -1559,15 +1562,18 @@ async function dbTransaction(callback) {
       await client.query("BEGIN");
       const executor = {
         query: async (sql, params = []) => {
-          const res = await client.query(convertSqlForPg(sql), params);
+          const pgParams = params.map((p) => p === void 0 ? null : p);
+          const res = await client.query(convertSqlForPg(sql), pgParams);
           return res.rows;
         },
         queryOne: async (sql, params = []) => {
-          const res = await client.query(convertSqlForPg(sql), params);
+          const pgParams = params.map((p) => p === void 0 ? null : p);
+          const res = await client.query(convertSqlForPg(sql), pgParams);
           return res.rows[0] || null;
         },
         execute: async (sql, params = []) => {
-          const res = await client.query(convertSqlForPg(sql), params);
+          const pgParams = params.map((p) => p === void 0 ? null : p);
+          const res = await client.query(convertSqlForPg(sql), pgParams);
           return { rowCount: res.rowCount || 0 };
         }
       };
@@ -1605,6 +1611,37 @@ async function dbTransaction(callback) {
     throw err;
   }
 }
+function sanitizeColumnValue(k, rawVal) {
+  let val = rawVal;
+  if (["active", "is_active", "is_read_only", "email_verified", "used", "encrypted"].includes(k)) {
+    if (isUsingPostgres()) {
+      return Boolean(val);
+    }
+    return val ? 1 : 0;
+  }
+  if (["last_login", "trial_start", "trial_end", "paid_at"].includes(k)) {
+    if (val === "" || val === void 0 || val === null) {
+      return null;
+    }
+    return val;
+  }
+  if (["created_at", "updated_at", "timestamp", "processed_at"].includes(k)) {
+    if (val === "" || val === void 0 || val === null) {
+      return (/* @__PURE__ */ new Date()).toISOString();
+    }
+    return val;
+  }
+  if (["start_date", "end_date", "expires_at", "retention_expires_at"].includes(k)) {
+    if (val === "" || val === void 0) {
+      return null;
+    }
+    return val;
+  }
+  if (val === void 0) {
+    return null;
+  }
+  return val;
+}
 var dbAdapter = {
   // Query One
   async queryOne(sql, params = []) {
@@ -1629,16 +1666,7 @@ var dbAdapter = {
   async insert(table, data, onConflict) {
     const keys = Object.keys(data);
     const placeholders = keys.map(() => "?").join(", ");
-    const values = keys.map((k) => {
-      const val = data[k];
-      if (["active", "is_active", "is_read_only", "email_verified", "used", "encrypted"].includes(k)) {
-        if (isUsingPostgres()) {
-          return Boolean(val);
-        }
-        return val ? 1 : 0;
-      }
-      return val;
-    });
+    const values = keys.map((k) => sanitizeColumnValue(k, data[k]));
     let sql = `INSERT INTO ${table} (${keys.join(", ")}) VALUES (${placeholders})`;
     if (onConflict) {
       sql += ` ${onConflict}`;
@@ -1649,16 +1677,7 @@ var dbAdapter = {
   async update(table, data, whereClause, whereParams = []) {
     const keys = Object.keys(data);
     const setClause = keys.map((k) => `${k} = ?`).join(", ");
-    const values = keys.map((k) => {
-      const val = data[k];
-      if (["active", "is_active", "is_read_only", "email_verified", "used", "encrypted"].includes(k)) {
-        if (isUsingPostgres()) {
-          return Boolean(val);
-        }
-        return val ? 1 : 0;
-      }
-      return val;
-    });
+    const values = keys.map((k) => sanitizeColumnValue(k, data[k]));
     const sql = `UPDATE ${table} SET ${setClause} WHERE ${whereClause}`;
     return dbExecute(sql, [...values, ...whereParams]);
   },
@@ -1734,7 +1753,7 @@ var dbAdapter = {
       `, [businessId, cleanEmail]);
     },
     async updateLastLogin(userId, lastLogin) {
-      const ts = lastLogin || (/* @__PURE__ */ new Date()).toISOString().replace("T", " ").substring(0, 16);
+      const ts = lastLogin && lastLogin.trim() !== "" ? lastLogin : (/* @__PURE__ */ new Date()).toISOString();
       await dbExecute("UPDATE users SET last_login = ? WHERE id = ?", [ts, userId]);
     },
     async createResetToken(userId, token, expiresAt) {
@@ -5608,7 +5627,7 @@ apiRouter.post("/auth/register", async (req, res) => {
       phone: phone || "",
       active: true,
       createdAt,
-      lastLogin: createdAt.replace("T", " ").substring(0, 16)
+      lastLogin: null
     };
     const trialStart = /* @__PURE__ */ new Date();
     const trialEnd = new Date(Date.now() + 14 * 24 * 60 * 60 * 1e3);
@@ -6037,7 +6056,7 @@ apiRouter.post("/users", authenticate, enforceSubscriptionAccess, requireResourc
       phone: phone || "",
       active: active !== false,
       createdAt,
-      lastLogin: ""
+      lastLogin: null
     };
     await dbAdapter.insert("users", {
       id,
@@ -6050,7 +6069,7 @@ apiRouter.post("/users", authenticate, enforceSubscriptionAccess, requireResourc
       role: userObj.role,
       active: userObj.active,
       email_verified: true,
-      last_login: "",
+      last_login: null,
       created_at: createdAt,
       data_json: JSON.stringify(userObj)
     });
@@ -6854,6 +6873,9 @@ apiRouter.post("/admin/businesses", authenticate, requireSuperAdmin, async (req,
       logo_text: logoText,
       status,
       currency: "IDR",
+      business_type: bizObj.industry,
+      onboarding_status: "COMPLETED",
+      onboarding_step: 4,
       created_at: now,
       data_json: JSON.stringify(bizObj)
     });
@@ -6869,7 +6891,7 @@ apiRouter.post("/admin/businesses", authenticate, requireSuperAdmin, async (req,
       phone: ownerPhone || "",
       active: true,
       createdAt: now,
-      lastLogin: ""
+      lastLogin: null
     };
     await dbAdapter.insert("users", {
       id: ownerId,
@@ -6881,7 +6903,8 @@ apiRouter.post("/admin/businesses", authenticate, requireSuperAdmin, async (req,
       salt,
       role: "Administrator",
       active: true,
-      last_login: "",
+      email_verified: true,
+      last_login: null,
       created_at: now,
       data_json: JSON.stringify(userObj)
     });
@@ -6905,6 +6928,50 @@ apiRouter.post("/admin/businesses", authenticate, requireSuperAdmin, async (req,
       created_at: now,
       updated_at: now
     });
+    const initialSettings = {
+      companyName: name,
+      businessType: bizObj.industry,
+      address: "",
+      phone: ownerPhone || "",
+      email: cleanEmail,
+      taxId: "",
+      defaultCurrency: "IDR (Rp)",
+      costingMethod: "FULL_COSTING",
+      defaultMarginPct: 35,
+      maxShrinkageTolerancePct: 5,
+      enableOverheads: true,
+      enableLaborTracking: true,
+      currency: "IDR (Rp)",
+      defaultCostingMethod: "FULL_COSTING",
+      hppRounding: 100,
+      defaultShrinkagePct: 3,
+      defaultMarginTargetPct: 35,
+      hourlyLaborRateStandard: 25e3
+    };
+    await dbAdapter.insert("company_settings", {
+      business_id: businessId,
+      company_name: name,
+      data_json: JSON.stringify(initialSettings)
+    }, "ON CONFLICT (business_id) DO UPDATE SET company_name = EXCLUDED.company_name, data_json = EXCLUDED.data_json");
+    const defaultUnits = [
+      { id: `u_${businessId}_1`, code: "kg", name: "Kilogram", businessId, tenantId: businessId },
+      { id: `u_${businessId}_2`, code: "gr", name: "Gram", businessId, tenantId: businessId },
+      { id: `u_${businessId}_3`, code: "pcs", name: "Pieces / Buah", businessId, tenantId: businessId },
+      { id: `u_${businessId}_4`, code: "l", name: "Liter", businessId, tenantId: businessId },
+      { id: `u_${businessId}_5`, code: "ml", name: "Mililiter", businessId, tenantId: businessId },
+      { id: `u_${businessId}_6`, code: "box", name: "Box / Kotak", businessId, tenantId: businessId },
+      { id: `u_${businessId}_7`, code: "btl", name: "Botol", businessId, tenantId: businessId },
+      { id: `u_${businessId}_8`, code: "dus", name: "Dus", businessId, tenantId: businessId }
+    ];
+    for (const u of defaultUnits) {
+      await dbAdapter.insert("units", {
+        id: u.id,
+        business_id: businessId,
+        name: u.name,
+        code: u.code,
+        data_json: JSON.stringify(u)
+      });
+    }
     logAdminAudit(
       req.auth.userId,
       req.auth.userName,

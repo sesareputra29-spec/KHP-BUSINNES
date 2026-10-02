@@ -231,6 +231,7 @@ export async function runProductionTestSuite() {
       tokenA = newLoginRes.body.token; // update active token
     });
 
+    let superAdminToken = '';
     await runTest('AUTH', '1.8 Autentikasi Platform Super Admin', async () => {
       const res = await request('/api/auth/login', {
         method: 'POST',
@@ -238,6 +239,68 @@ export async function runProductionTestSuite() {
       });
       assertEqual(res.status, 200, 'Super Admin login harus sukses');
       assert(res.body.isSuperAdmin, 'Flag isSuperAdmin harus bernilai true');
+      superAdminToken = res.body.token;
+    });
+
+    let adminCreatedBizId = '';
+    let adminCreatedOwnerEmail = '';
+    const adminCreatedOwnerPassword = 'OwnerSecurePass2026!';
+    await runTest('AUTH', '1.9 Super Admin Membuat Bisnis Baru & Akun Owner (Verifikasi Timestamp PostgreSQL Valid / NULL)', async () => {
+      adminCreatedOwnerEmail = `bizowner_${Date.now()}@umkmberkah.com`;
+      const res = await request('/api/admin/businesses', {
+        method: 'POST',
+        token: superAdminToken,
+        body: {
+          name: 'PT Berkah Pangan Nusantara',
+          industry: 'Manufaktur & Produksi',
+          planId: 'plan_starter',
+          ownerName: 'Hendro Gunawan',
+          ownerEmail: adminCreatedOwnerEmail,
+          ownerPhone: '081234567890',
+          ownerPassword: adminCreatedOwnerPassword,
+          status: 'ACTIVE',
+        },
+      });
+
+      assertEqual(res.status, 201, 'Super Admin membuat bisnis harus mengembalikan HTTP 201');
+      assert(res.body.success, 'Flag success harus bernilai true');
+      assert(res.body.business?.id, 'ID bisnis baru harus ada');
+      assert(res.body.owner?.id, 'ID user owner harus ada');
+      assertEqual(res.body.owner.email, adminCreatedOwnerEmail, 'Email owner harus cocok');
+
+      adminCreatedBizId = res.body.business.id;
+
+      // Verifikasi database record secara langsung
+      const userRow = await dbAdapter.queryOne('SELECT * FROM users WHERE id = ?', [res.body.owner.id]);
+      assert(userRow, 'Data owner harus tersimpan di tabel users');
+      assert(userRow.last_login === null || userRow.last_login === undefined, 'last_login owner baru harus NULL, bukan string kosong ""');
+      assert(userRow.created_at, 'created_at harus berupa timestamp valid');
+
+      const subRow = await dbAdapter.queryOne('SELECT * FROM subscriptions WHERE business_id = ?', [adminCreatedBizId]);
+      assert(subRow, 'Subscription harus tersimpan di tabel subscriptions');
+      assert(subRow.start_date, 'start_date harus timestamp valid');
+      assert(subRow.end_date, 'end_date harus timestamp valid');
+
+      const settingsRow = await dbAdapter.queryOne('SELECT * FROM company_settings WHERE business_id = ?', [adminCreatedBizId]);
+      assert(settingsRow, 'Company settings harus otomatis dibuat untuk bisnis baru');
+    });
+
+    await runTest('AUTH', '1.10 Owner Baru Hasil Pembuatan Super Admin Berhasil Login & Mengakses Data', async () => {
+      const res = await request('/api/auth/login', {
+        method: 'POST',
+        body: {
+          identifier: adminCreatedOwnerEmail,
+          password: adminCreatedOwnerPassword,
+        },
+      });
+
+      assertEqual(res.status, 200, 'Owner baru harus berhasil login');
+      assert(res.body.token, 'Token sesi owner harus diterbitkan');
+      assertEqual(res.body.user.email, adminCreatedOwnerEmail, 'Email owner harus sesuai');
+      assertEqual(res.body.business.id, adminCreatedBizId, 'Business ID owner harus cocok');
+
+      const meRes = await request('/api/auth/me', { token: res.body.token });
+      assertEqual(meRes.status, 200, '/auth/me owner baru harus sukses');
     });
 
     // =========================================================================
