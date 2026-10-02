@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { db } from '../db';
+import { dbAdapter } from '../db';
 import { logSecurityAudit, logBusinessActivity } from '../audit';
 import {
   BackupMetadata,
@@ -62,7 +62,7 @@ export class BackupService {
     triggerType: BackupTriggerType = 'MANUAL_ADMIN',
     retentionDays = this.defaultRetentionDays
   ): Promise<BackupMetadata> {
-    const bizRow = db.prepare('SELECT id, name, plan, data_json FROM businesses WHERE id = ?').get(businessId) as any;
+    const bizRow = await dbAdapter.queryOne('SELECT id, name, plan, data_json FROM businesses WHERE id = ?', [businessId]);
     if (!bizRow) {
       throw new Error(`Bisnis dengan ID ${businessId} tidak ditemukan.`);
     }
@@ -82,8 +82,8 @@ export class BackupService {
     // 2. Extract tenant data non-blockingly
     for (const table of this.tenantTables) {
       try {
-        const rows = db.prepare(`SELECT data_json FROM ${table} WHERE business_id = ?`).all(businessId) as any[];
-        data[table] = rows.map((r) => {
+        const rows = await dbAdapter.query(`SELECT data_json FROM ${table} WHERE business_id = ?`, [businessId]);
+        data[table] = rows.map((r: any) => {
           try {
             return JSON.parse(r.data_json);
           } catch {
@@ -133,13 +133,13 @@ export class BackupService {
     };
 
     // Save backup record into database
-    db.prepare(`
+    await dbAdapter.execute(`
       INSERT INTO system_backups (
         id, scope, business_id, business_name, version, timestamp,
         checksum_sha256, size_bytes, tables_json, record_counts_json,
         encrypted, storage_location, retention_expires_at, triggered_by, trigger_type, status
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       metadata.id,
       metadata.scope,
       metadata.businessId || null,
@@ -156,7 +156,7 @@ export class BackupService {
       metadata.triggeredBy,
       metadata.triggerType,
       metadata.status
-    );
+    ]);
 
     logSecurityAudit({
       action: 'admin_action',
@@ -212,8 +212,8 @@ export class BackupService {
 
     for (const table of allTables) {
       try {
-        const rows = db.prepare(`SELECT * FROM ${table}`).all() as any[];
-        data[table] = rows.map((r) => {
+        const rows = await dbAdapter.query(`SELECT * FROM ${table}`);
+        data[table] = rows.map((r: any) => {
           if (r.data_json) {
             try {
               return JSON.parse(r.data_json);
@@ -260,13 +260,13 @@ export class BackupService {
       storageLocation,
     };
 
-    db.prepare(`
+    await dbAdapter.execute(`
       INSERT INTO system_backups (
         id, scope, business_id, business_name, version, timestamp,
         checksum_sha256, size_bytes, tables_json, record_counts_json,
         encrypted, storage_location, retention_expires_at, triggered_by, trigger_type, status
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       metadata.id,
       metadata.scope,
       null,
@@ -283,7 +283,7 @@ export class BackupService {
       metadata.triggeredBy,
       metadata.triggerType,
       metadata.status
-    );
+    ]);
 
     logSecurityAudit({
       action: 'admin_action',
@@ -300,7 +300,7 @@ export class BackupService {
    * Cryptographically verifies backup integrity against manifest checksum
    */
   async verifyBackup(backupId: string): Promise<RestoreValidationResult> {
-    const row = db.prepare('SELECT * FROM system_backups WHERE id = ?').get(backupId) as any;
+    const row = await dbAdapter.queryOne('SELECT * FROM system_backups WHERE id = ?', [backupId]);
     if (!row) {
       return {
         valid: false,
@@ -397,95 +397,104 @@ export class BackupService {
     }
 
     // Read and parse backup payload
-    const row = db.prepare('SELECT * FROM system_backups WHERE id = ?').get(backupId) as any;
+    const row = await dbAdapter.queryOne('SELECT * FROM system_backups WHERE id = ?', [backupId]);
+    if (!row) {
+      return {
+        success: false,
+        backupId,
+        restoredAt: new Date().toISOString(),
+        recordsRestored: {},
+        integrityVerified: false,
+        dryRun: false,
+        error: 'Arsip backup tidak ditemukan.',
+      };
+    }
+
     const content = await this.storage.readBackup(row.storage_location);
     const parsed: BackupPayload = JSON.parse(content);
     const data = parsed.data;
 
     const restoredRecords: Record<string, number> = {};
 
-    // Execute atomic restore transaction
-    db.exec('BEGIN TRANSACTION;');
     try {
-      // 1. Update company settings if present
-      if (data['company_settings'] && data['company_settings'].length > 0) {
-        const settings = data['company_settings'][0];
-        db.prepare(`
-          INSERT INTO company_settings (business_id, company_name, data_json)
-          VALUES (?, ?, ?)
-          ON CONFLICT(business_id) DO UPDATE SET
-            company_name = excluded.company_name,
-            data_json = excluded.data_json
-        `).run(targetBusinessId, settings.companyName || 'Perusahaan', JSON.stringify(settings));
-        restoredRecords['company_settings'] = 1;
-      }
-
-      // 2. Restore standard isolated relational entities
-      const directTables = [
-        {
-          name: 'categories',
-          insSql: 'INSERT INTO categories (id, business_id, name, code, type, data_json) VALUES (?, ?, ?, ?, ?, ?)',
-          getParams: (item: any) => [item.id, targetBusinessId, item.name, item.code || 'CAT', item.type || 'MATERIAL', JSON.stringify(item)],
-        },
-        {
-          name: 'units',
-          insSql: 'INSERT INTO units (id, business_id, name, code, data_json) VALUES (?, ?, ?, ?, ?)',
-          getParams: (item: any) => [item.id, targetBusinessId, item.name, item.code || 'U', JSON.stringify(item)],
-        },
-        {
-          name: 'suppliers',
-          insSql: 'INSERT INTO suppliers (id, business_id, code, name, status, data_json) VALUES (?, ?, ?, ?, ?, ?)',
-          getParams: (item: any) => [item.id, targetBusinessId, item.code || 'SUP', item.name, item.status || 'Aktif', JSON.stringify(item)],
-        },
-        {
-          name: 'raw_materials',
-          insSql: 'INSERT INTO raw_materials (id, business_id, code, name, category_id, status, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          getParams: (item: any) => [item.id, targetBusinessId, item.code || 'MAT', item.name, item.categoryId || null, item.status || 'Aktif', JSON.stringify(item)],
-        },
-        {
-          name: 'products',
-          insSql: 'INSERT INTO products (id, business_id, sku, name, category_id, status, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          getParams: (item: any) => [item.id, targetBusinessId, item.sku || item.code || 'PRD', item.name, item.categoryId || null, item.status || 'Aktif', JSON.stringify(item)],
-        },
-        {
-          name: 'boms',
-          insSql: 'INSERT INTO boms (id, business_id, code, product_id, product_name, data_json) VALUES (?, ?, ?, ?, ?, ?)',
-          getParams: (item: any) => [item.id, targetBusinessId, item.code || 'BOM', item.productId, item.productName, JSON.stringify(item)],
-        },
-        {
-          name: 'production_batches',
-          insSql: 'INSERT INTO production_batches (id, business_id, batch_number, bom_id, product_id, status, date, data_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          getParams: (item: any) => [item.id, targetBusinessId, item.batchNumber || item.code || 'BATCH', item.bomId || 'BOM_REF', item.productId, item.status || 'DRAFT', item.date || item.createdAt?.substring(0, 10) || null, JSON.stringify(item)],
-        },
-        {
-          name: 'purchase_orders',
-          insSql: 'INSERT INTO purchase_orders (id, business_id, po_number, supplier_id, status, order_date, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          getParams: (item: any) => [item.id, targetBusinessId, item.poNumber || item.code || 'PO', item.supplierId, item.status || 'DRAFT', item.orderDate || item.date || null, JSON.stringify(item)],
-        },
-        {
-          name: 'stock_movements',
-          insSql: 'INSERT INTO stock_movements (id, business_id, item_id, type, date, data_json) VALUES (?, ?, ?, ?, ?, ?)',
-          getParams: (item: any) => [item.id, targetBusinessId, item.itemId, item.type || 'IN', item.date || new Date().toISOString(), JSON.stringify(item)],
-        },
-      ];
-
-      for (const t of directTables) {
-        if (Array.isArray(data[t.name])) {
-          // Clean existing tenant records before importing
-          db.prepare(`DELETE FROM ${t.name} WHERE business_id = ?`).run(targetBusinessId);
-
-          const insStmt = db.prepare(t.insSql);
-          let count = 0;
-          for (const item of data[t.name]) {
-            const itemClean = { ...item, businessId: targetBusinessId, tenantId: targetBusinessId };
-            insStmt.run(...t.getParams(itemClean));
-            count++;
-          }
-          restoredRecords[t.name] = count;
+      await dbAdapter.transaction(async (tx) => {
+        // 1. Update company settings if present
+        if (data['company_settings'] && data['company_settings'].length > 0) {
+          const settings = data['company_settings'][0];
+          await tx.execute(`
+            INSERT INTO company_settings (business_id, company_name, data_json)
+            VALUES (?, ?, ?)
+            ON CONFLICT(business_id) DO UPDATE SET
+              company_name = excluded.company_name,
+              data_json = excluded.data_json
+          `, [targetBusinessId, settings.companyName || 'Perusahaan', JSON.stringify(settings)]);
+          restoredRecords['company_settings'] = 1;
         }
-      }
 
-      db.exec('COMMIT;');
+        // 2. Restore standard isolated relational entities
+        const directTables = [
+          {
+            name: 'categories',
+            insSql: 'INSERT INTO categories (id, business_id, name, code, type, data_json) VALUES (?, ?, ?, ?, ?, ?)',
+            getParams: (item: any) => [item.id, targetBusinessId, item.name, item.code || 'CAT', item.type || 'MATERIAL', JSON.stringify(item)],
+          },
+          {
+            name: 'units',
+            insSql: 'INSERT INTO units (id, business_id, name, code, data_json) VALUES (?, ?, ?, ?, ?)',
+            getParams: (item: any) => [item.id, targetBusinessId, item.name, item.code || 'U', JSON.stringify(item)],
+          },
+          {
+            name: 'suppliers',
+            insSql: 'INSERT INTO suppliers (id, business_id, code, name, status, data_json) VALUES (?, ?, ?, ?, ?, ?)',
+            getParams: (item: any) => [item.id, targetBusinessId, item.code || 'SUP', item.name, item.status || 'Aktif', JSON.stringify(item)],
+          },
+          {
+            name: 'raw_materials',
+            insSql: 'INSERT INTO raw_materials (id, business_id, code, name, category_id, status, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            getParams: (item: any) => [item.id, targetBusinessId, item.code || 'BB', item.name, item.categoryId || null, item.status || 'Aktif', JSON.stringify(item)],
+          },
+          {
+            name: 'products',
+            insSql: 'INSERT INTO products (id, business_id, sku, name, category_id, status, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            getParams: (item: any) => [item.id, targetBusinessId, item.sku || item.code || 'PRD', item.name, item.categoryId || null, item.status || 'Aktif', JSON.stringify(item)],
+          },
+          {
+            name: 'boms',
+            insSql: 'INSERT INTO boms (id, business_id, code, product_id, product_name, data_json) VALUES (?, ?, ?, ?, ?, ?)',
+            getParams: (item: any) => [item.id, targetBusinessId, item.code || 'BOM', item.productId, item.productName, JSON.stringify(item)],
+          },
+          {
+            name: 'production_batches',
+            insSql: 'INSERT INTO production_batches (id, business_id, batch_number, bom_id, product_id, status, date, data_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            getParams: (item: any) => [item.id, targetBusinessId, item.batchNumber || item.code || 'BATCH', item.bomId || 'BOM_REF', item.productId, item.status || 'DRAFT', item.date || item.createdAt?.substring(0, 10) || null, JSON.stringify(item)],
+          },
+          {
+            name: 'purchase_orders',
+            insSql: 'INSERT INTO purchase_orders (id, business_id, po_number, supplier_id, status, order_date, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            getParams: (item: any) => [item.id, targetBusinessId, item.poNumber || item.code || 'PO', item.supplierId, item.status || 'DRAFT', item.orderDate || item.date || null, JSON.stringify(item)],
+          },
+          {
+            name: 'stock_movements',
+            insSql: 'INSERT INTO stock_movements (id, business_id, item_id, type, date, data_json) VALUES (?, ?, ?, ?, ?, ?)',
+            getParams: (item: any) => [item.id, targetBusinessId, item.itemId, item.type || 'IN', item.date || new Date().toISOString(), JSON.stringify(item)],
+          },
+        ];
+
+        for (const t of directTables) {
+          if (Array.isArray(data[t.name])) {
+            // Clean existing tenant records before importing
+            await tx.execute(`DELETE FROM ${t.name} WHERE business_id = ?`, [targetBusinessId]);
+
+            let count = 0;
+            for (const item of data[t.name]) {
+              const itemClean = { ...item, businessId: targetBusinessId, tenantId: targetBusinessId };
+              await tx.execute(t.insSql, t.getParams(itemClean));
+              count++;
+            }
+            restoredRecords[t.name] = count;
+          }
+        }
+      });
 
       logSecurityAudit({
         action: 'admin_action',
@@ -493,7 +502,7 @@ export class BackupService {
         result: 'SUCCESS',
         businessId: targetBusinessId,
         details: `Pemulihan data (Restore) berhasil diterapkan untuk bisnis ${targetBusinessId} dari arsip ${backupId}.`,
-        metadata: { backupId, targetBusinessId, recordsRestored: restoredRecords },
+        metadata: { backupId, targetBusinessId, recordsRestored: restoredRecords, actorName },
       });
 
       return {
@@ -505,7 +514,6 @@ export class BackupService {
         dryRun: false,
       };
     } catch (err: any) {
-      db.exec('ROLLBACK;');
       console.error('[BackupService] Restore transaction failed, rolled back cleanly:', err);
       return {
         success: false,
@@ -524,7 +532,7 @@ export class BackupService {
    */
   async pruneExpiredBackups(): Promise<{ prunedCount: number; errors: string[] }> {
     const nowIso = new Date().toISOString();
-    const expiredRows = db.prepare('SELECT id, storage_location FROM system_backups WHERE retention_expires_at < ?').all(nowIso) as any[];
+    const expiredRows = await dbAdapter.query('SELECT id, storage_location FROM system_backups WHERE retention_expires_at < ?', [nowIso]);
 
     let prunedCount = 0;
     const errors: string[] = [];
@@ -532,7 +540,7 @@ export class BackupService {
     for (const r of expiredRows) {
       try {
         await this.storage.deleteBackup(r.storage_location);
-        db.prepare('DELETE FROM system_backups WHERE id = ?').run(r.id);
+        await dbAdapter.execute('DELETE FROM system_backups WHERE id = ?', [r.id]);
         prunedCount++;
       } catch (err: any) {
         errors.push(`Gagal menghapus arsip kadaluarsa ${r.id}: ${err.message}`);
@@ -545,19 +553,19 @@ export class BackupService {
   /**
    * Lists available backup archives (filtered by businessId or platform-wide)
    */
-  getBackupList(businessId?: string, isSuperAdmin = false): BackupMetadata[] {
+  async getBackupList(businessId?: string, isSuperAdmin = false): Promise<BackupMetadata[]> {
     let query = 'SELECT * FROM system_backups WHERE 1=1';
     const params: any[] = [];
 
     if (!isSuperAdmin && businessId) {
-      query += ' AND (business_id = ? OR scope = "TENANT")';
+      query += ' AND (business_id = ? OR scope = \'TENANT\')';
       params.push(businessId);
     }
 
     query += ' ORDER BY timestamp DESC LIMIT 50';
-    const rows = db.prepare(query).all(...params) as any[];
+    const rows = await dbAdapter.query(query, params);
 
-    return rows.map((r) => ({
+    return rows.map((r: any) => ({
       id: r.id,
       scope: r.scope as BackupScope,
       businessId: r.business_id,
@@ -580,8 +588,8 @@ export class BackupService {
   /**
    * Returns Disaster Recovery (DR) readiness metrics
    */
-  getDisasterRecoveryStatus(): DisasterRecoveryStatus {
-    const allBackups = this.getBackupList(undefined, true);
+  async getDisasterRecoveryStatus(): Promise<DisasterRecoveryStatus> {
+    const allBackups = await this.getBackupList(undefined, true);
     const lastAutomated = allBackups.find((b) => b.triggerType === 'AUTOMATED_CRON' || b.scope === 'PLATFORM_FULL') || allBackups[0];
 
     let rpoHours = 0;
@@ -604,3 +612,4 @@ export class BackupService {
 }
 
 export const backupService = new BackupService();
+

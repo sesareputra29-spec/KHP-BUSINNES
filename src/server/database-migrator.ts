@@ -1,4 +1,4 @@
-import { db } from './db';
+import { dbAdapter, isUsingPostgres } from './db';
 
 export interface IntegrityCheckResult {
   passed: boolean;
@@ -41,7 +41,7 @@ export const RELATIONAL_TABLES = [
 /**
  * Audit database integrity across all 19 SaaS relational tables.
  */
-export function auditDatabaseIntegrity(): IntegrityCheckResult {
+export async function auditDatabaseIntegrity(): Promise<IntegrityCheckResult> {
   const tableStats: Record<string, number> = {};
   const orphanRecords: Record<string, number> = {};
   const uniqueConstraintIssues: string[] = [];
@@ -49,20 +49,20 @@ export function auditDatabaseIntegrity(): IntegrityCheckResult {
   // 1. Table Counts
   for (const table of RELATIONAL_TABLES) {
     try {
-      const res = db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get() as { count: number };
-      tableStats[table] = res.count;
+      const res = await dbAdapter.queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM ${table}`);
+      tableStats[table] = Number(res?.count ?? -1);
     } catch (err: any) {
       tableStats[table] = -1;
     }
   }
 
-  // 2. Foreign Key Check (SQLite native pragma)
-  const fkCheck = db.prepare('PRAGMA foreign_key_check;').all() as Array<{
-    table: string;
-    rowid: any;
-    parent: string;
-    fkid: number;
-  }>;
+  // 2. Foreign Key Check (SQLite native pragma in dev)
+  let fkCheck: Array<{ table: string; rowid: any; parent: string; fkid: number }> = [];
+  if (!isUsingPostgres()) {
+    try {
+      fkCheck = (await dbAdapter.query('PRAGMA foreign_key_check;')) as any;
+    } catch {}
+  }
 
   // 3. Tenant Isolation & Orphan Check: every business_id must exist in businesses
   for (const table of RELATIONAL_TABLES) {
@@ -79,15 +79,16 @@ export function auditDatabaseIntegrity(): IntegrityCheckResult {
       continue;
     }
     try {
-      const orphans = db.prepare(`
+      const orphans = await dbAdapter.queryOne<{ count: number }>(`
         SELECT COUNT(*) as count
         FROM ${table} t
         LEFT JOIN businesses b ON t.business_id = b.id
         WHERE b.id IS NULL
-      `).get() as { count: number };
+      `);
 
-      if (orphans.count > 0) {
-        orphanRecords[table] = orphans.count;
+      const count = Number(orphans?.count || 0);
+      if (count > 0) {
+        orphanRecords[table] = count;
       }
     } catch (err) {}
   }
@@ -106,12 +107,12 @@ export function auditDatabaseIntegrity(): IntegrityCheckResult {
 
   for (const chk of compositeChecks) {
     try {
-      const dupes = db.prepare(`
+      const dupes = await dbAdapter.query<any>(`
         SELECT business_id, ${chk.column}, COUNT(*) as count
         FROM ${chk.table}
         GROUP BY business_id, ${chk.column}
         HAVING COUNT(*) > 1
-      `).all() as Array<{ business_id: string; [key: string]: any; count: number }>;
+      `);
 
       if (dupes.length > 0) {
         uniqueConstraintIssues.push(`Duplikasi ditemukan pada ${chk.name} (${chk.table}): ${dupes.length} duplikasi.`);
@@ -135,7 +136,7 @@ export function auditDatabaseIntegrity(): IntegrityCheckResult {
  * Generate a non-destructive PostgreSQL SQL Migration Dump
  * Converts all records from SQLite to standard PostgreSQL DML (INSERT ... ON CONFLICT DO UPDATE).
  */
-export function generatePostgreSqlMigrationScript(): string {
+export async function generatePostgreSqlMigrationScript(): Promise<string> {
   const lines: string[] = [];
   lines.push('-- ============================================================================');
   lines.push('-- SAAS HPP: POSTGRESQL PRODUCTION DATA MIGRATION SCRIPT');
@@ -157,7 +158,7 @@ export function generatePostgreSqlMigrationScript(): string {
   for (const table of RELATIONAL_TABLES) {
     let rows: any[] = [];
     try {
-      rows = db.prepare(`SELECT * FROM ${table}`).all() as any[];
+      rows = await dbAdapter.query(`SELECT * FROM ${table}`);
     } catch {
       continue;
     }

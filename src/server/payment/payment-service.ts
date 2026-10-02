@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { db, logAdminAudit } from '../db';
+import { dbAdapter, logAdminAudit, isUsingPostgres } from '../db';
 import { logAudit } from '../auth';
 import { emailService } from '../email/email-service';
 import {
@@ -55,7 +55,10 @@ export class PaymentService {
     invoice: any;
     payment: CreatePaymentResponse;
   }> {
-    const planRow = db.prepare('SELECT * FROM plans WHERE code = ? AND is_active = 1').get(params.planCode) as any;
+    const planRow = await dbAdapter.queryOne(
+      'SELECT * FROM plans WHERE code = ? AND (is_active = 1 OR is_active = TRUE)',
+      [params.planCode]
+    );
     if (!planRow) {
       throw new Error(`Paket ${params.planCode} tidak ditemukan atau belum aktif.`);
     }
@@ -90,10 +93,10 @@ export class PaymentService {
     };
 
     // 1. Insert initial invoice with PENDING status
-    db.prepare(`
+    await dbAdapter.execute(`
       INSERT INTO invoices (id, business_id, invoice_number, plan_id, plan_name, amount, currency, status, billing_cycle, payment_method, paid_at, created_at, data_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       invId,
       params.businessId,
       invoiceNumber,
@@ -106,8 +109,8 @@ export class PaymentService {
       params.paymentMethod,
       null,
       now.toISOString(),
-      JSON.stringify(invoiceObj)
-    );
+      JSON.stringify(invoiceObj),
+    ]);
 
     // 2. Delegate to payment gateway provider
     const payment = await this.provider.createPayment({
@@ -125,13 +128,13 @@ export class PaymentService {
     });
 
     // 3. Record payment transaction record in database
-    db.prepare(`
+    await dbAdapter.execute(`
       INSERT INTO payment_transactions (
         id, business_id, invoice_id, provider, provider_tx_id,
         amount, currency, payment_method, status, payment_url,
         qr_code_data, virtual_account, metadata_json, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       payment.transactionId,
       params.businessId,
       invId,
@@ -146,8 +149,8 @@ export class PaymentService {
       payment.virtualAccount || null,
       JSON.stringify({ planCode: planRow.code, billingCycle: invoiceObj.billingCycle }),
       payment.createdAt,
-      payment.createdAt
-    );
+      payment.createdAt,
+    ]);
 
     logAudit(
       params.businessId,
@@ -198,11 +201,11 @@ export class PaymentService {
     const event = this.provider.parseWebhook(headers, body);
 
     // 3. Strict Idempotency Check
-    const existingEvent = db.prepare(`
+    const existingEvent = await dbAdapter.queryOne(`
       SELECT id, status, processed_at
       FROM webhook_events
       WHERE provider = ? AND event_id = ?
-    `).get(event.provider, event.eventId) as any;
+    `, [event.provider, event.eventId]);
 
     if (existingEvent) {
       console.log(`[PaymentWebhook] Idempotent hit: Event ${event.eventId} already processed at ${existingEvent.processed_at}. No re-activation.`);
@@ -219,10 +222,10 @@ export class PaymentService {
     // 4. Record event in webhook_events table for audit and future idempotency
     const now = new Date().toISOString();
     const webhookRecordId = `wh_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
-    db.prepare(`
+    await dbAdapter.execute(`
       INSERT INTO webhook_events (id, provider, event_id, event_type, reference_id, status, processed_at, payload_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       webhookRecordId,
       event.provider,
       event.eventId,
@@ -230,15 +233,15 @@ export class PaymentService {
       event.invoiceNumber,
       event.status,
       now,
-      JSON.stringify(event.rawPayload)
-    );
+      JSON.stringify(event.rawPayload),
+    ]);
 
     // 5. Server Verification of Invoice
-    const invoiceRow = db.prepare(`
+    const invoiceRow = await dbAdapter.queryOne(`
       SELECT *
       FROM invoices
       WHERE invoice_number = ?
-    `).get(event.invoiceNumber) as any;
+    `, [event.invoiceNumber]);
 
     if (!invoiceRow) {
       console.error(`[PaymentWebhook] Invoice ${event.invoiceNumber} not found in database.`);
@@ -262,18 +265,18 @@ export class PaymentService {
       invoiceData.paidAt = event.paidAt || now;
       invoiceData.paymentReference = event.providerTxId;
 
-      db.prepare(`
+      await dbAdapter.execute(`
         UPDATE invoices
         SET status = 'PAID', paid_at = ?, data_json = ?
         WHERE invoice_number = ?
-      `).run(invoiceData.paidAt, JSON.stringify(invoiceData), event.invoiceNumber);
+      `, [invoiceData.paidAt, JSON.stringify(invoiceData), event.invoiceNumber]);
 
       // Update payment_transactions
-      db.prepare(`
+      await dbAdapter.execute(`
         UPDATE payment_transactions
         SET status = 'PAID', paid_at = ?, updated_at = ?
         WHERE invoice_id = ?
-      `).run(invoiceData.paidAt, now, invoiceRow.id);
+      `, [invoiceData.paidAt, now, invoiceRow.id]);
 
       // Activate or Extend Subscription IF NOT ALREADY PAID
       if (!alreadyPaid) {
@@ -281,39 +284,41 @@ export class PaymentService {
         const durationDays = isYearly ? 365 : 30;
         const endDate = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
         const subId = `sub_${businessId}`;
+        const readOnlyVal = isUsingPostgres() ? false : 0;
 
-        db.prepare(`
+        await dbAdapter.execute(`
           INSERT INTO subscriptions (
             id, business_id, plan_id, status, billing_cycle,
             start_date, end_date, trial_start, trial_end, is_read_only, payment_reference, notes, created_at, updated_at
-          ) VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?, NULL, NULL, 0, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             plan_id = excluded.plan_id,
             status = 'ACTIVE',
             billing_cycle = excluded.billing_cycle,
             start_date = excluded.start_date,
             end_date = excluded.end_date,
-            is_read_only = 0,
+            is_read_only = excluded.is_read_only,
             payment_reference = excluded.payment_reference,
             notes = excluded.notes,
             updated_at = excluded.updated_at
-        `).run(
+        `, [
           subId,
           businessId,
           invoiceRow.plan_id,
           invoiceRow.billing_cycle,
           now,
           endDate,
+          readOnlyVal,
           event.invoiceNumber,
           `Langganan terkonfirmasi via webhook payment gateway (${event.provider} - ${event.paymentMethod})`,
           now,
-          now
-        );
+          now,
+        ]);
 
         // Sync plan code to business table
-        const planRow = db.prepare('SELECT code FROM plans WHERE id = ?').get(invoiceRow.plan_id) as any;
+        const planRow = await dbAdapter.queryOne('SELECT code FROM plans WHERE id = ?', [invoiceRow.plan_id]);
         if (planRow) {
-          db.prepare('UPDATE businesses SET plan = ? WHERE id = ?').run(planRow.code, businessId);
+          await dbAdapter.execute('UPDATE businesses SET plan = ? WHERE id = ?', [planRow.code, businessId]);
         }
 
         logAdminAudit(
@@ -344,7 +349,7 @@ export class PaymentService {
 
         // Non-blocking payment confirmation email
         try {
-          const ownerUser = db.prepare("SELECT name, email FROM users WHERE business_id = ? AND role = 'Manager / Owner'").get(businessId) as any;
+          const ownerUser = await dbAdapter.queryOne("SELECT name, email FROM users WHERE business_id = ? AND role = 'Manager / Owner'", [businessId]);
           if (ownerUser && ownerUser.email) {
             emailService.sendPaymentConfirmation(ownerUser.email, {
               customerName: ownerUser.name || 'Pelanggan',
@@ -361,8 +366,8 @@ export class PaymentService {
         }
       }
     } else if (event.status === 'FAILED' || event.status === 'EXPIRED') {
-      db.prepare(`UPDATE invoices SET status = ? WHERE invoice_number = ?`).run(event.status, event.invoiceNumber);
-      db.prepare(`UPDATE payment_transactions SET status = ?, updated_at = ? WHERE invoice_id = ?`).run(event.status, now, invoiceRow.id);
+      await dbAdapter.execute(`UPDATE invoices SET status = ? WHERE invoice_number = ?`, [event.status, event.invoiceNumber]);
+      await dbAdapter.execute(`UPDATE payment_transactions SET status = ?, updated_at = ? WHERE invoice_id = ?`, [event.status, now, invoiceRow.id]);
     }
 
     return {
@@ -379,7 +384,7 @@ export class PaymentService {
    * Generates a signed webhook simulation and feeds it directly into processWebhook.
    */
   async simulatePaymentSettlement(invoiceNumber: string): Promise<WebhookProcessResult> {
-    const inv = db.prepare('SELECT * FROM invoices WHERE invoice_number = ?').get(invoiceNumber) as any;
+    const inv = await dbAdapter.queryOne('SELECT * FROM invoices WHERE invoice_number = ?', [invoiceNumber]);
     if (!inv) {
       return { success: false, code: 404, message: `Faktur ${invoiceNumber} tidak ditemukan.` };
     }

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { db } from './db';
+import { dbAdapter } from './db';
 
 export type SecurityAuditAction =
   | 'login_success'
@@ -76,12 +76,7 @@ export function logSecurityAudit(event: SecurityAuditEvent): void {
     const cleanIp = sanitizeIp(event.ipAddress);
     const cleanUa = sanitizeUserAgent(event.userAgent);
 
-    db.prepare(`
-      INSERT INTO security_audit_logs (
-        id, business_id, user_id, user_name, user_email, user_role,
-        action, category, result, ip_address, user_agent, details, metadata_json, timestamp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    const secParams = [
       id,
       event.businessId || null,
       event.userId || null,
@@ -95,17 +90,22 @@ export function logSecurityAudit(event: SecurityAuditEvent): void {
       cleanUa,
       event.details || null,
       event.metadata ? JSON.stringify(event.metadata) : null,
-      timestamp
-    );
+      timestamp,
+    ];
+
+    dbAdapter.execute(`
+      INSERT INTO security_audit_logs (
+        id, business_id, user_id, user_name, user_email, user_role,
+        action, category, result, ip_address, user_agent, details, metadata_json, timestamp
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, secParams).catch((err) => {
+      console.error('[SecurityAudit] Failed to persist security audit record:', err.message);
+    });
 
     // Also mirror to legacy admin_audit_logs if it affects administrative entities
     if (event.category === 'ADMIN' || event.category === 'TENANT' || event.category === 'BILLING') {
       try {
-        db.prepare(`
-          INSERT INTO admin_audit_logs (
-            id, actor_user_id, actor_name, actor_role, business_id, action, target_type, target_id, timestamp, metadata_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
+        const admParams = [
           id,
           event.userId || 'system',
           event.userName || 'System / Security Engine',
@@ -115,8 +115,13 @@ export function logSecurityAudit(event: SecurityAuditEvent): void {
           event.category,
           event.metadata?.targetId || event.businessId || 'global',
           timestamp,
-          event.metadata ? JSON.stringify(event.metadata) : null
-        );
+          event.metadata ? JSON.stringify(event.metadata) : null,
+        ];
+        dbAdapter.execute(`
+          INSERT INTO admin_audit_logs (
+            id, actor_user_id, actor_name, actor_role, business_id, action, target_type, target_id, timestamp, metadata_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, admParams).catch(() => {});
       } catch {}
     }
   } catch (err) {
@@ -148,18 +153,20 @@ export function logBusinessActivity(event: ActivityLogEvent): void {
       metadata: event.metadata || null,
     };
 
-    db.prepare(`
+    dbAdapter.execute(`
       INSERT INTO activity_logs (id, business_id, user_id, action, module, timestamp, data_json)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       id,
       event.businessId,
       event.userId,
       event.action,
       event.module,
       timestamp,
-      JSON.stringify(logRecord)
-    );
+      JSON.stringify(logRecord),
+    ]).catch((err) => {
+      console.error('[ActivityLog] Failed to persist business activity record:', err.message);
+    });
   } catch (err) {
     console.error('[ActivityLog] Failed to persist business activity record:', err);
   }
@@ -182,11 +189,7 @@ export function logAdminAudit(
     const id = `adm_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     const timestamp = new Date().toISOString();
 
-    db.prepare(`
-      INSERT INTO admin_audit_logs (
-        id, actor_user_id, actor_name, actor_role, business_id, action, target_type, target_id, timestamp, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    const admParams = [
       id,
       actorUserId,
       actorName,
@@ -196,8 +199,16 @@ export function logAdminAudit(
       targetType,
       targetId || 'global',
       timestamp,
-      metadata ? JSON.stringify(metadata) : null
-    );
+      metadata ? JSON.stringify(metadata) : null,
+    ];
+
+    dbAdapter.execute(`
+      INSERT INTO admin_audit_logs (
+        id, actor_user_id, actor_name, actor_role, business_id, action, target_type, target_id, timestamp, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, admParams).catch((err) => {
+      console.error('[AdminAudit] Failed to record log:', err.message);
+    });
 
     // Also record in security_audit_logs for single comprehensive view
     logSecurityAudit({

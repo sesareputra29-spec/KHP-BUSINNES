@@ -1,4 +1,4 @@
-import { db } from './db';
+import { dbAdapter } from './db';
 import { FeatureKey, SaaSSubscriptionStatus, PlanLimits } from '../types';
 
 export interface SubscriptionLifecycleState {
@@ -89,9 +89,8 @@ export function evaluateSubscriptionLifecycle(subRow: any): SubscriptionLifecycl
       status = 'EXPIRED';
       isReadOnly = true;
       try {
-        db.prepare("UPDATE subscriptions SET status = 'EXPIRED', is_read_only = 1, updated_at = ? WHERE id = ?")
-          .run(new Date().toISOString(), subRow.id);
-        db.prepare("UPDATE businesses SET status = 'EXPIRED' WHERE id = ?").run(subRow.business_id);
+        dbAdapter.execute("UPDATE subscriptions SET status = 'EXPIRED', is_read_only = 1, updated_at = ? WHERE id = ?", [new Date().toISOString(), subRow.id]).catch(() => {});
+        dbAdapter.execute("UPDATE businesses SET status = 'EXPIRED' WHERE id = ?", [subRow.business_id]).catch(() => {});
       } catch {}
     }
   }
@@ -108,17 +107,15 @@ export function evaluateSubscriptionLifecycle(subRow: any): SubscriptionLifecycl
         inGracePeriod = true;
         isReadOnly = false; // Grace period allows operations with warnings
         try {
-          db.prepare("UPDATE subscriptions SET status = 'PAST_DUE', updated_at = ? WHERE id = ?")
-            .run(new Date().toISOString(), subRow.id);
+          dbAdapter.execute("UPDATE subscriptions SET status = 'PAST_DUE', updated_at = ? WHERE id = ?", [new Date().toISOString(), subRow.id]).catch(() => {});
         } catch {}
       } else {
         // Passed grace period -> EXPIRED
         status = 'EXPIRED';
         isReadOnly = true;
         try {
-          db.prepare("UPDATE subscriptions SET status = 'EXPIRED', is_read_only = 1, updated_at = ? WHERE id = ?")
-            .run(new Date().toISOString(), subRow.id);
-          db.prepare("UPDATE businesses SET status = 'EXPIRED' WHERE id = ?").run(subRow.business_id);
+          dbAdapter.execute("UPDATE subscriptions SET status = 'EXPIRED', is_read_only = 1, updated_at = ? WHERE id = ?", [new Date().toISOString(), subRow.id]).catch(() => {});
+          dbAdapter.execute("UPDATE businesses SET status = 'EXPIRED' WHERE id = ?", [subRow.business_id]).catch(() => {});
         } catch {}
       }
     }
@@ -133,9 +130,8 @@ export function evaluateSubscriptionLifecycle(subRow: any): SubscriptionLifecycl
       status = 'EXPIRED';
       isReadOnly = true;
       try {
-        db.prepare("UPDATE subscriptions SET status = 'EXPIRED', is_read_only = 1, updated_at = ? WHERE id = ?")
-          .run(new Date().toISOString(), subRow.id);
-        db.prepare("UPDATE businesses SET status = 'EXPIRED' WHERE id = ?").run(subRow.business_id);
+        dbAdapter.execute("UPDATE subscriptions SET status = 'EXPIRED', is_read_only = 1, updated_at = ? WHERE id = ?", [new Date().toISOString(), subRow.id]).catch(() => {});
+        dbAdapter.execute("UPDATE businesses SET status = 'EXPIRED' WHERE id = ?", [subRow.business_id]).catch(() => {});
       } catch {}
     } else {
       inGracePeriod = true;
@@ -165,10 +161,10 @@ export function evaluateSubscriptionLifecycle(subRow: any): SubscriptionLifecycl
 }
 
 /**
- * Fetch raw active subscription row with joined plan
+ * Fetch raw active subscription row with joined plan (Unified PostgreSQL / SQLite)
  */
-export function getActiveSubscriptionRow(businessId: string): any {
-  return db.prepare(`
+export async function getActiveSubscriptionRowAsync(businessId: string): Promise<any> {
+  return dbAdapter.queryOne(`
     SELECT
       s.*,
       p.code as plan_code,
@@ -182,21 +178,25 @@ export function getActiveSubscriptionRow(businessId: string): any {
     WHERE s.business_id = ?
     ORDER BY s.created_at DESC
     LIMIT 1
-  `).get(businessId);
+  `, [businessId]);
 }
+export const getActiveSubscriptionRow = getActiveSubscriptionRowAsync;
 
 /**
  * Single Source of Truth: Check if a business has entitlement for a specific feature
  */
-export function checkFeatureEntitlement(businessId: string, feature: FeatureKey): EntitlementCheckResult {
-  const bizRow = db.prepare('SELECT status FROM businesses WHERE id = ?').get(businessId) as any;
+export async function checkFeatureEntitlementAsync(
+  businessId: string,
+  feature: FeatureKey
+): Promise<EntitlementCheckResult> {
+  const bizRow = await dbAdapter.queryOne('SELECT status FROM businesses WHERE id = ?', [businessId]);
   if (!bizRow) {
     return {
       allowed: false,
       reason: 'Bisnis tidak ditemukan.',
       feature,
-      planCode: 'UNKNOWN',
-      planName: 'Unknown',
+      planCode: 'NONE',
+      planName: 'Tidak Diketahui',
       subscriptionStatus: 'EXPIRED',
       isReadOnly: true,
     };
@@ -214,7 +214,7 @@ export function checkFeatureEntitlement(businessId: string, feature: FeatureKey)
     };
   }
 
-  const subRow = getActiveSubscriptionRow(businessId);
+  const subRow = await getActiveSubscriptionRowAsync(businessId);
   if (!subRow) {
     return {
       allowed: false,
@@ -255,54 +255,69 @@ export function checkFeatureEntitlement(businessId: string, feature: FeatureKey)
     isReadOnly: lifecycle.isReadOnly,
   };
 }
+export const checkFeatureEntitlement = checkFeatureEntitlementAsync;
 
-/**
- * Single Source of Truth: Enforce Plan Resource Quotas & Limits
- */
-export function checkResourceLimit(
+export async function checkResourceLimitAsync(
   businessId: string,
-  resource: 'users' | 'products' | 'raw_materials' | 'boms' | 'batches'
-): LimitCheckResult {
-  const subRow = getActiveSubscriptionRow(businessId);
-  const planCode = subRow?.plan_code || 'STARTER';
-
-  let limits: PlanLimits = {
+  resource: 'users' | 'products' | 'raw_materials' | 'boms' | 'batches',
+  existingLimits?: PlanLimits,
+  existingPlanCode?: string
+): Promise<LimitCheckResult> {
+  let limits: PlanLimits = existingLimits || {
     maxUsers: 5,
     maxProducts: 100,
     maxRawMaterials: 50,
     maxBoms: 50,
     maxBatchesMonthly: 100,
   };
+  let planCode = existingPlanCode || 'STARTER';
+  let planName = 'Starter';
 
-  try {
-    if (subRow?.limits_json) {
-      limits = JSON.parse(subRow.limits_json);
+  if (!existingLimits) {
+    const subRow = await getActiveSubscriptionRowAsync(businessId);
+    if (subRow) {
+      planCode = subRow.plan_code || 'STARTER';
+      planName = subRow.plan_name || 'Starter';
+      if (subRow.limits_json) {
+        try {
+          limits = JSON.parse(subRow.limits_json);
+        } catch {}
+      }
     }
-  } catch {}
+  }
 
   let current = 0;
   let max = 0;
 
   switch (resource) {
-    case 'users':
-      current = (db.prepare('SELECT COUNT(*) as count FROM users WHERE business_id = ? AND active = 1').get(businessId) as any).count;
+    case 'users': {
+      const row = await dbAdapter.queryOne<{ count: number }>('SELECT COUNT(*) as count FROM users WHERE business_id = ? AND (active = 1 OR active = TRUE)', [businessId]);
+      current = Number(row?.count || 0);
       max = limits.maxUsers;
       break;
-    case 'products':
-      current = (db.prepare('SELECT COUNT(*) as count FROM products WHERE business_id = ?').get(businessId) as any).count;
+    }
+    case 'products': {
+      const row = await dbAdapter.queryOne<{ count: number }>('SELECT COUNT(*) as count FROM products WHERE business_id = ?', [businessId]);
+      current = Number(row?.count || 0);
       max = limits.maxProducts;
       break;
-    case 'raw_materials':
-      current = (db.prepare('SELECT COUNT(*) as count FROM raw_materials WHERE business_id = ?').get(businessId) as any).count;
+    }
+    case 'raw_materials': {
+      const row = await dbAdapter.queryOne<{ count: number }>('SELECT COUNT(*) as count FROM raw_materials WHERE business_id = ?', [businessId]);
+      current = Number(row?.count || 0);
       max = limits.maxRawMaterials;
       break;
-    case 'boms':
-      current = (db.prepare('SELECT COUNT(*) as count FROM boms WHERE business_id = ?').get(businessId) as any).count;
+    }
+    case 'boms': {
+      const row = await dbAdapter.queryOne<{ count: number }>('SELECT COUNT(*) as count FROM boms WHERE business_id = ?', [businessId]);
+      current = Number(row?.count || 0);
       max = limits.maxBoms;
       break;
+    }
     case 'batches': {
       const monthPrefix = new Date().toISOString().substring(0, 7);
-      current = (db.prepare("SELECT COUNT(*) as count FROM production_batches WHERE business_id = ? AND (date LIKE ? OR id LIKE ?)").get(businessId, `${monthPrefix}%`, `%${monthPrefix}%`) as any).count;
+      const row = await dbAdapter.queryOne<{ count: number }>("SELECT COUNT(*) as count FROM production_batches WHERE business_id = ? AND (date LIKE ? OR id LIKE ?)", [businessId, `${monthPrefix}%`, `%${monthPrefix}%`]);
+      current = Number(row?.count || 0);
       max = limits.maxBatchesMonthly;
       break;
     }
@@ -311,7 +326,7 @@ export function checkResourceLimit(
   const allowed = current < max;
   const message = allowed
     ? undefined
-    : `Batas kuota ${resource} untuk paket ${subRow?.plan_name || planCode} telah tercapai (${current}/${max}). Silakan upgrade paket langganan Anda.`;
+    : `Batas kuota ${resource} untuk paket ${planName || planCode} telah tercapai (${current}/${max}). Silakan upgrade paket langganan Anda.`;
 
   return {
     allowed,
@@ -322,64 +337,13 @@ export function checkResourceLimit(
     message,
   };
 }
+export const checkResourceLimit = checkResourceLimitAsync;
 
-/**
- * Validate Downgrade: Ensures existing data volume does not silently get orphaned when downgrading
- */
-export function validatePlanChangeSafety(businessId: string, targetPlanCode: string): { safe: boolean; errors: string[] } {
-  const targetPlan = db.prepare('SELECT * FROM plans WHERE code = ? AND is_active = 1').get(targetPlanCode) as any;
-  if (!targetPlan) {
-    return { safe: false, errors: [`Paket target ${targetPlanCode} tidak ditemukan.`] };
-  }
-
-  let targetLimits: PlanLimits = {
-    maxUsers: 5,
-    maxProducts: 100,
-    maxRawMaterials: 50,
-    maxBoms: 50,
-    maxBatchesMonthly: 100,
-  };
-
-  try {
-    if (targetPlan.limits_json) targetLimits = JSON.parse(targetPlan.limits_json);
-  } catch {}
-
-  const errors: string[] = [];
-
-  const userCount = (db.prepare('SELECT COUNT(*) as c FROM users WHERE business_id = ? AND active = 1').get(businessId) as any).c;
-  if (userCount > targetLimits.maxUsers) {
-    errors.push(`Jumlah staf aktif (${userCount}) melebihi kuota paket target (${targetLimits.maxUsers} akun).`);
-  }
-
-  const prodCount = (db.prepare('SELECT COUNT(*) as c FROM products WHERE business_id = ?').get(businessId) as any).c;
-  if (prodCount > targetLimits.maxProducts) {
-    errors.push(`Jumlah SKU produk (${prodCount}) melebihi kuota paket target (${targetLimits.maxProducts} SKU).`);
-  }
-
-  const rmCount = (db.prepare('SELECT COUNT(*) as c FROM raw_materials WHERE business_id = ?').get(businessId) as any).c;
-  if (rmCount > targetLimits.maxRawMaterials) {
-    errors.push(`Jumlah bahan baku (${rmCount}) melebihi kuota paket target (${targetLimits.maxRawMaterials} bahan).`);
-  }
-
-  const bomCount = (db.prepare('SELECT COUNT(*) as c FROM boms WHERE business_id = ?').get(businessId) as any).c;
-  if (bomCount > targetLimits.maxBoms) {
-    errors.push(`Jumlah resep BOM (${bomCount}) melebihi kuota paket target (${targetLimits.maxBoms} BOM).`);
-  }
-
-  return {
-    safe: errors.length === 0,
-    errors,
-  };
-}
-
-/**
- * Generate full entitlement summary for API sync to frontend
- */
-export function getBusinessEntitlementSummary(businessId: string): BusinessEntitlementSummary | null {
-  const bizRow = db.prepare('SELECT id, name, status, plan FROM businesses WHERE id = ?').get(businessId) as any;
+export async function getBusinessEntitlementSummaryAsync(businessId: string): Promise<BusinessEntitlementSummary | null> {
+  const bizRow = await dbAdapter.queryOne('SELECT id, name, status, plan FROM businesses WHERE id = ?', [businessId]);
   if (!bizRow) return null;
 
-  const subRow = getActiveSubscriptionRow(businessId);
+  const subRow = await getActiveSubscriptionRowAsync(businessId);
   if (!subRow) return null;
 
   const lifecycle = evaluateSubscriptionLifecycle(subRow);
@@ -420,12 +384,19 @@ export function getBusinessEntitlementSummary(businessId: string): BusinessEntit
     featuresMap[f] = planFeatures.includes(f);
   }
 
-  const usersCount = (db.prepare('SELECT COUNT(*) as c FROM users WHERE business_id = ? AND active = 1').get(businessId) as any).c;
-  const productsCount = (db.prepare('SELECT COUNT(*) as c FROM products WHERE business_id = ?').get(businessId) as any).c;
-  const rawMaterialsCount = (db.prepare('SELECT COUNT(*) as c FROM raw_materials WHERE business_id = ?').get(businessId) as any).c;
-  const bomsCount = (db.prepare('SELECT COUNT(*) as c FROM boms WHERE business_id = ?').get(businessId) as any).c;
+  const uRes = await dbAdapter.queryOne<{ c: number }>('SELECT COUNT(*) as c FROM users WHERE business_id = ? AND (active = 1 OR active = TRUE)', [businessId]);
+  const pRes = await dbAdapter.queryOne<{ c: number }>('SELECT COUNT(*) as c FROM products WHERE business_id = ?', [businessId]);
+  const rmRes = await dbAdapter.queryOne<{ c: number }>('SELECT COUNT(*) as c FROM raw_materials WHERE business_id = ?', [businessId]);
+  const bRes = await dbAdapter.queryOne<{ c: number }>('SELECT COUNT(*) as c FROM boms WHERE business_id = ?', [businessId]);
+
   const monthPrefix = new Date().toISOString().substring(0, 7);
-  const batchesCount = (db.prepare("SELECT COUNT(*) as c FROM production_batches WHERE business_id = ? AND (date LIKE ? OR id LIKE ?)").get(businessId, `${monthPrefix}%`, `%${monthPrefix}%`) as any).c;
+  const btRes = await dbAdapter.queryOne<{ c: number }>("SELECT COUNT(*) as c FROM production_batches WHERE business_id = ? AND (date LIKE ? OR id LIKE ?)", [businessId, `${monthPrefix}%`, `%${monthPrefix}%`]);
+
+  const usersCount = Number(uRes?.c || 0);
+  const productsCount = Number(pRes?.c || 0);
+  const materialsCount = Number(rmRes?.c || 0);
+  const bomsCount = Number(bRes?.c || 0);
+  const batchesThisMonth = Number(btRes?.c || 0);
 
   return {
     businessId: bizRow.id,
@@ -465,9 +436,9 @@ export function getBusinessEntitlementSummary(businessId: string): BusinessEntit
         percentage: Math.min(100, Math.round((productsCount / planLimits.maxProducts) * 100)),
       },
       rawMaterials: {
-        current: rawMaterialsCount,
+        current: materialsCount,
         max: planLimits.maxRawMaterials,
-        percentage: Math.min(100, Math.round((rawMaterialsCount / planLimits.maxRawMaterials) * 100)),
+        percentage: Math.min(100, Math.round((materialsCount / planLimits.maxRawMaterials) * 100)),
       },
       boms: {
         current: bomsCount,
@@ -475,10 +446,63 @@ export function getBusinessEntitlementSummary(businessId: string): BusinessEntit
         percentage: Math.min(100, Math.round((bomsCount / planLimits.maxBoms) * 100)),
       },
       batchesMonthly: {
-        current: batchesCount,
+        current: batchesThisMonth,
         max: planLimits.maxBatchesMonthly,
-        percentage: Math.min(100, Math.round((batchesCount / planLimits.maxBatchesMonthly) * 100)),
+        percentage: Math.min(100, Math.round((batchesThisMonth / planLimits.maxBatchesMonthly) * 100)),
       },
     },
   };
 }
+
+export async function validatePlanChangeSafetyAsync(businessId: string, targetPlanCode: string): Promise<{ safe: boolean; errors: string[] }> {
+  const targetPlan = await dbAdapter.queryOne('SELECT * FROM plans WHERE code = ? AND (is_active = 1 OR is_active = TRUE)', [targetPlanCode]);
+  if (!targetPlan) {
+    return { safe: false, errors: [`Paket target ${targetPlanCode} tidak ditemukan.`] };
+  }
+
+  let targetLimits: PlanLimits = {
+    maxUsers: 5,
+    maxProducts: 100,
+    maxRawMaterials: 50,
+    maxBoms: 50,
+    maxBatchesMonthly: 100,
+  };
+
+  try {
+    if (targetPlan.limits_json) targetLimits = JSON.parse(targetPlan.limits_json);
+  } catch {}
+
+  const errors: string[] = [];
+
+  const uRes = await dbAdapter.queryOne<{ c: number }>('SELECT COUNT(*) as c FROM users WHERE business_id = ? AND (active = 1 OR active = TRUE)', [businessId]);
+  const userCount = Number(uRes?.c || 0);
+  if (userCount > targetLimits.maxUsers) {
+    errors.push(`Jumlah staf aktif (${userCount}) melebihi kuota paket target (${targetLimits.maxUsers} akun).`);
+  }
+
+  const pRes = await dbAdapter.queryOne<{ c: number }>('SELECT COUNT(*) as c FROM products WHERE business_id = ?', [businessId]);
+  const prodCount = Number(pRes?.c || 0);
+  if (prodCount > targetLimits.maxProducts) {
+    errors.push(`Jumlah SKU produk (${prodCount}) melebihi kuota paket target (${targetLimits.maxProducts} SKU).`);
+  }
+
+  const rmRes = await dbAdapter.queryOne<{ c: number }>('SELECT COUNT(*) as c FROM raw_materials WHERE business_id = ?', [businessId]);
+  const rmCount = Number(rmRes?.c || 0);
+  if (rmCount > targetLimits.maxRawMaterials) {
+    errors.push(`Jumlah bahan baku (${rmCount}) melebihi kuota paket target (${targetLimits.maxRawMaterials} bahan).`);
+  }
+
+  const bRes = await dbAdapter.queryOne<{ c: number }>('SELECT COUNT(*) as c FROM boms WHERE business_id = ?', [businessId]);
+  const bomCount = Number(bRes?.c || 0);
+  if (bomCount > targetLimits.maxBoms) {
+    errors.push(`Jumlah resep BOM (${bomCount}) melebihi kuota paket target (${targetLimits.maxBoms} BOM).`);
+  }
+
+  return {
+    safe: errors.length === 0,
+    errors,
+  };
+}
+
+export const getBusinessEntitlementSummary = getBusinessEntitlementSummaryAsync;
+export const validatePlanChangeSafety = validatePlanChangeSafetyAsync;

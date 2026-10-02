@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { app } from '../src/server/app';
-import { db } from '../src/server/db';
+import { dbAdapter } from '../src/server/db';
 
 // ANSI color helpers
 const GREEN = '\x1b[32m';
@@ -168,7 +168,7 @@ export async function runProductionTestSuite() {
 
     await runTest('AUTH', '1.5 Login Ditolak untuk Akun Nonaktif / Disabled (403)', async () => {
       // Temporarily deactivate user
-      db.prepare('UPDATE users SET active = 0 WHERE id = ?').run(userIdA);
+      await dbAdapter.execute('UPDATE users SET active = 0 WHERE id = ?', [userIdA]);
 
       const res = await request('/api/auth/login', {
         method: 'POST',
@@ -179,7 +179,7 @@ export async function runProductionTestSuite() {
       assertEqual(res.body.error, 'AccountDisabled', 'Error code harus AccountDisabled');
 
       // Re-activate user
-      db.prepare('UPDATE users SET active = 1 WHERE id = ?').run(userIdA);
+      await dbAdapter.execute('UPDATE users SET active = 1 WHERE id = ?', [userIdA]);
     });
 
     await runTest('AUTH', '1.6 Verifikasi Sesi Aktif via /api/auth/me', async () => {
@@ -198,7 +198,7 @@ export async function runProductionTestSuite() {
       assertEqual(forgotRes.status, 200, 'Forgot password harus mengembalikan HTTP 200');
 
       // Get generated reset token from database
-      const tokenRow = db.prepare('SELECT token FROM password_reset_tokens WHERE user_id = ? AND used = 0 ORDER BY created_at DESC LIMIT 1').get(userIdA) as any;
+      const tokenRow = await dbAdapter.queryOne('SELECT token FROM password_reset_tokens WHERE user_id = ? AND used = 0 ORDER BY created_at DESC LIMIT 1', [userIdA]) as any;
       assert(tokenRow?.token, 'Token reset sandi harus tersimpan di database');
 
       // 2. Reset password with new password
@@ -367,7 +367,7 @@ export async function runProductionTestSuite() {
     await runTest('SUBSCRIPTION', '3.4 Mode READ-ONLY Saat Langganan Kedaluwarsa / Suspended', async () => {
       try {
         // Mark subscription as read-only for tenant A
-        db.prepare("UPDATE subscriptions SET is_read_only = 1, status = 'EXPIRED' WHERE business_id = ?").run(businessIdA);
+        await dbAdapter.execute("UPDATE subscriptions SET is_read_only = 1, status = 'EXPIRED' WHERE business_id = ?", [businessIdA]);
 
         // Attempt to create a category -> MUST BE REJECTED 403
         const postRes = await request('/api/categories', {
@@ -386,7 +386,7 @@ export async function runProductionTestSuite() {
         assertEqual(getRes.status, 200, 'Akses membaca data (GET) tetap diizinkan saat status READ-ONLY');
       } finally {
         // Restore subscription to ACTIVE/TRIAL
-        db.prepare("UPDATE subscriptions SET is_read_only = 0, status = 'TRIAL' WHERE business_id = ?").run(businessIdA);
+        await dbAdapter.execute("UPDATE subscriptions SET is_read_only = 0, status = 'TRIAL' WHERE business_id = ?", [businessIdA]);
       }
     });
 

@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'node:crypto';
-import { db } from './db';
+import { dbAdapter } from './db';
 
 export class AppError extends Error {
   public readonly statusCode: number;
@@ -135,12 +135,7 @@ export function recordError(err: any, req?: Request): ErrorLogRecord {
 
   // Persist to database error_logs table
   try {
-    db.prepare(`
-      INSERT INTO error_logs (
-        id, error_id, business_id, user_id, path, method, status_code,
-        error_name, message, sanitized_message, stack_trace, ip_address, user_agent, timestamp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    const errParams = [
       id,
       errorId,
       businessId || null,
@@ -154,8 +149,17 @@ export function recordError(err: any, req?: Request): ErrorLogRecord {
       stackTrace || null,
       ipAddress,
       userAgent,
-      timestamp
-    );
+      timestamp,
+    ];
+
+    dbAdapter.execute(`
+      INSERT INTO error_logs (
+        id, error_id, business_id, user_id, path, method, status_code,
+        error_name, message, sanitized_message, stack_trace, ip_address, user_agent, timestamp
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, errParams).catch((dbErr) => {
+      console.error('[ErrorLogger] Failed to write to error_logs table:', dbErr.message);
+    });
   } catch (dbErr) {
     console.error('[ErrorLogger] Failed to write to error_logs table:', dbErr);
   }

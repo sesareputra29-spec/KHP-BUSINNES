@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { db } from '../db';
+import { dbAdapter, isUsingPostgres } from '../db';
 import { logSecurityAudit, logAdminAudit } from '../audit';
 import { emailService } from '../email/email-service';
 import { backupService } from '../backup/backup-service';
@@ -49,14 +49,14 @@ export async function runSubscriptionLifecycleJob(): Promise<{
   const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
   const oneDayMs = 1 * 24 * 60 * 60 * 1000;
 
-  const subs = db.prepare(`
+  const subs = await dbAdapter.query(`
     SELECT s.*, b.name as business_name, p.name as plan_name, p.code as plan_code
     FROM subscriptions s
     JOIN businesses b ON s.business_id = b.id
     JOIN plans p ON s.plan_id = p.id
     WHERE s.status IN ('ACTIVE', 'TRIAL')
     LIMIT 200
-  `).all() as any[];
+  `);
 
   let expiredCount = 0;
   let remindersSent = 0;
@@ -66,14 +66,16 @@ export async function runSubscriptionLifecycleJob(): Promise<{
     const lifecycle = evaluateSubscriptionLifecycle(sub);
 
     // 1. Expiration update
-    if (lifecycle.isReadOnly && sub.is_read_only === 0) {
-      db.prepare(`
+    const isCurrentlyReadOnly = sub.is_read_only === 1 || sub.is_read_only === true;
+    if (lifecycle.isReadOnly && !isCurrentlyReadOnly) {
+      const readOnlyVal = isUsingPostgres() ? true : 1;
+      await dbAdapter.execute(`
         UPDATE subscriptions
-        SET is_read_only = 1, status = ?, updated_at = ?
+        SET is_read_only = ?, status = ?, updated_at = ?
         WHERE id = ?
-      `).run(lifecycle.status, now.toISOString(), sub.id);
+      `, [readOnlyVal, lifecycle.status, now.toISOString(), sub.id]);
 
-      db.prepare('UPDATE businesses SET status = ? WHERE id = ?').run(lifecycle.status, sub.business_id);
+      await dbAdapter.execute('UPDATE businesses SET status = ? WHERE id = ?', [lifecycle.status, sub.business_id]);
 
       expiredCount++;
       details.push({
@@ -109,18 +111,18 @@ export async function runSubscriptionLifecycleJob(): Promise<{
         const todayDateStr = now.toISOString().substring(0, 10);
 
         // Check if reminder was already dispatched today to prevent duplicates
-        const existingAudit = db.prepare(`
+        const existingAudit = await dbAdapter.queryOne(`
           SELECT id FROM admin_audit_logs
           WHERE business_id = ? AND action = ? AND timestamp LIKE ?
-        `).get(sub.business_id, reminderTag, `${todayDateStr}%`);
+        `, [sub.business_id, reminderTag, `${todayDateStr}%`]);
 
         if (!existingAudit) {
-          const ownerUser = db.prepare(`
+          const ownerUser = await dbAdapter.queryOne(`
             SELECT name, email FROM users
             WHERE business_id = ? AND role IN ('Administrator', 'Manager / Owner')
             ORDER BY CASE WHEN role = 'Administrator' THEN 1 ELSE 2 END
             LIMIT 1
-          `).get(sub.business_id) as any;
+          `, [sub.business_id]);
 
           if (ownerUser && ownerUser.email) {
             const isTrial = sub.status === 'TRIAL';
@@ -184,22 +186,22 @@ export async function runRetentionCleanupJob(): Promise<{
   const backupResult = await backupService.pruneExpiredBackups();
 
   // 2. Cleanup expired session tokens (> 7 days old)
-  const sessionRun = db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(nowIso);
+  const sessionRun = await dbAdapter.execute('DELETE FROM sessions WHERE expires_at < ?', [nowIso]);
 
   // 3. Cleanup expired password reset tokens (> 15 minutes old)
-  const tokenRun = db.prepare('DELETE FROM password_reset_tokens WHERE expires_at < ? OR used = 1').run(nowIso);
+  const tokenRun = await dbAdapter.execute('DELETE FROM password_reset_tokens WHERE expires_at < ? OR used = 1 OR used = TRUE', [nowIso]);
 
   logSecurityAudit({
     action: 'admin_action',
     category: 'ADMIN',
     result: 'SUCCESS',
-    details: `Vercel Cron Retention Cleanup: ${backupResult.prunedCount} cadangan kadaluarsa dibersihkan, ${sessionRun.changes} sesi kadaluarsa dihapus, ${tokenRun.changes} token reset dihapus.`,
+    details: `Vercel Cron Retention Cleanup: ${backupResult.prunedCount} cadangan kadaluarsa dibersihkan, ${sessionRun.rowCount} sesi kadaluarsa dihapus, ${tokenRun.rowCount} token reset dihapus.`,
   });
 
   return {
     prunedBackups: backupResult.prunedCount,
-    deletedSessions: Number(sessionRun.changes),
-    deletedResetTokens: Number(tokenRun.changes),
+    deletedSessions: sessionRun.rowCount,
+    deletedResetTokens: tokenRun.rowCount,
   };
 }
 
@@ -216,11 +218,11 @@ export async function runAutomatedBackupJob(): Promise<{
   const twentyHoursAgo = new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString();
 
   // Check if an automated backup already exists in the last 20 hours
-  const recentAutoBackup = db.prepare(`
+  const recentAutoBackup = await dbAdapter.queryOne(`
     SELECT id, timestamp FROM system_backups
     WHERE scope = 'PLATFORM_FULL' AND trigger_type = 'AUTOMATED_CRON' AND timestamp > ?
     LIMIT 1
-  `).get(twentyHoursAgo) as any;
+  `, [twentyHoursAgo]);
 
   if (recentAutoBackup) {
     return {

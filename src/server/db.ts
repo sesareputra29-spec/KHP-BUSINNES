@@ -63,10 +63,40 @@ export function isUsingPostgres(): boolean {
 }
 
 // Convert SQLite '?' parameter placeholders to PostgreSQL '$1, $2, ...'
+// and convert boolean comparisons for PostgreSQL BOOLEAN type compatibility
 export function convertSqlForPg(sql: string): string {
   let paramIndex = 1;
   // Replace '?' that are not inside quotes
-  return sql.replace(/\?/g, () => `$${paramIndex++}`);
+  let pgSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
+
+  // Convert boolean literal checks so PostgreSQL does not error with "operator does not exist: boolean = integer"
+  pgSql = pgSql
+    .replace(/\bactive\s*=\s*1\b/gi, 'active = TRUE')
+    .replace(/\bactive\s*=\s*0\b/gi, 'active = FALSE')
+    .replace(/\bis_active\s*=\s*1\b/gi, 'is_active = TRUE')
+    .replace(/\bis_active\s*=\s*0\b/gi, 'is_active = FALSE')
+    .replace(/\bis_read_only\s*=\s*1\b/gi, 'is_read_only = TRUE')
+    .replace(/\bis_read_only\s*=\s*0\b/gi, 'is_read_only = FALSE')
+    .replace(/\bused\s*=\s*1\b/gi, 'used = TRUE')
+    .replace(/\bused\s*=\s*0\b/gi, 'used = FALSE')
+    .replace(/\bemail_verified\s*=\s*1\b/gi, 'email_verified = TRUE')
+    .replace(/\bemail_verified\s*=\s*0\b/gi, 'email_verified = FALSE')
+    .replace(/\bencrypted\s*=\s*1\b/gi, 'encrypted = TRUE')
+    .replace(/\bencrypted\s*=\s*0\b/gi, 'encrypted = FALSE');
+
+  // Handle SQLite INSERT OR REPLACE for PostgreSQL
+  if (/^\s*INSERT\s+OR\s+REPLACE\s+INTO\s+/i.test(pgSql)) {
+    pgSql = pgSql.replace(/^\s*INSERT\s+OR\s+REPLACE\s+INTO\s+/i, 'INSERT INTO ');
+    if (!/ON\s+CONFLICT/i.test(pgSql)) {
+      if (/data_json/i.test(pgSql)) {
+        pgSql += ' ON CONFLICT (id) DO UPDATE SET data_json = EXCLUDED.data_json';
+      } else {
+        pgSql += ' ON CONFLICT (id) DO NOTHING';
+      }
+    }
+  }
+
+  return pgSql;
 }
 
 // ============================================================================
@@ -94,8 +124,14 @@ try {
 } catch {}
 
 // ============================================================================
-// 3. ASYNC DATABASE ADAPTER (DIRECT POSTGRESQL IN PRODUCTION)
+// 3. ASYNC DATABASE ADAPTER (DIRECT POSTGRESQL IN PRODUCTION, SQLITE IN DEV)
 // ============================================================================
+
+export interface TrxExecutor {
+  query: <R = any>(sql: string, params?: any[]) => Promise<R[]>;
+  queryOne: <R = any>(sql: string, params?: any[]) => Promise<R | null>;
+  execute: (sql: string, params?: any[]) => Promise<{ rowCount: number }>;
+}
 
 export async function dbQuery<T = any>(sql: string, params: any[] = []): Promise<T[]> {
   const pool = getPgPool();
@@ -125,16 +161,359 @@ export async function dbExecute(sql: string, params: any[] = []): Promise<{ rowC
   if (pool) {
     const pgSql = convertSqlForPg(sql);
     const res = await pool.query(pgSql, params);
-    // Also mirror to in-memory sqlite if applicable
-    try {
-      sqliteDb.prepare(sql).run(...params);
-    } catch {}
     return { rowCount: res.rowCount || 0 };
   }
   const stmt = sqliteDb.prepare(sql);
-  stmt.run(...params);
-  return { rowCount: 1 };
+  const info: any = stmt.run(...params);
+  const rowCount = typeof info?.changes === 'number' || typeof info?.changes === 'bigint' ? Number(info.changes) : 1;
+  return { rowCount };
 }
+
+export async function dbTransaction<T>(
+  callback: (executor: TrxExecutor) => Promise<T>
+): Promise<T> {
+  const pool = getPgPool();
+  if (pool) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const executor: TrxExecutor = {
+        query: async <R = any>(sql: string, params: any[] = []): Promise<R[]> => {
+          const res = await client.query(convertSqlForPg(sql), params);
+          return res.rows as R[];
+        },
+        queryOne: async <R = any>(sql: string, params: any[] = []): Promise<R | null> => {
+          const res = await client.query(convertSqlForPg(sql), params);
+          return (res.rows[0] as R) || null;
+        },
+        execute: async (sql: string, params: any[] = []): Promise<{ rowCount: number }> => {
+          const res = await client.query(convertSqlForPg(sql), params);
+          return { rowCount: res.rowCount || 0 };
+        },
+      };
+      const result = await callback(executor);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  // SQLite transaction for development
+  sqliteDb.exec('BEGIN TRANSACTION;');
+  try {
+    const executor: TrxExecutor = {
+      query: async <R = any>(sql: string, params: any[] = []): Promise<R[]> => {
+        return sqliteDb.prepare(sql).all(...params) as R[];
+      },
+      queryOne: async <R = any>(sql: string, params: any[] = []): Promise<R | null> => {
+        return (sqliteDb.prepare(sql).get(...params) as R) || null;
+      },
+      execute: async (sql: string, params: any[] = []): Promise<{ rowCount: number }> => {
+        const info: any = sqliteDb.prepare(sql).run(...params);
+        const rowCount = typeof info?.changes === 'number' || typeof info?.changes === 'bigint' ? Number(info.changes) : 1;
+        return { rowCount };
+      },
+    };
+    const result = await callback(executor);
+    sqliteDb.exec('COMMIT;');
+    return result;
+  } catch (err) {
+    sqliteDb.exec('ROLLBACK;');
+    throw err;
+  }
+}
+
+// ============================================================================
+// UNIFIED PRODUCTION DATABASE ADAPTER
+// ============================================================================
+export const dbAdapter = {
+  // Query One
+  async queryOne<T = any>(sql: string, params: any[] = []): Promise<T | null> {
+    return dbQueryOne<T>(sql, params);
+  },
+
+  // Query Many / All
+  async query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
+    return dbQuery<T>(sql, params);
+  },
+  async queryMany<T = any>(sql: string, params: any[] = []): Promise<T[]> {
+    return dbQuery<T>(sql, params);
+  },
+
+  // Execute (INSERT, UPDATE, DELETE)
+  async execute(sql: string, params: any[] = []): Promise<{ rowCount: number }> {
+    return dbExecute(sql, params);
+  },
+
+  // Transaction
+  async transaction<T>(callback: (trx: TrxExecutor) => Promise<T>): Promise<T> {
+    return dbTransaction<T>(callback);
+  },
+
+  // Generic Insert Helper
+  async insert(table: string, data: Record<string, any>, onConflict?: string): Promise<{ rowCount: number }> {
+    const keys = Object.keys(data);
+    const placeholders = keys.map(() => '?').join(', ');
+    const values = keys.map((k) => {
+      const val = data[k];
+      if (['active', 'is_active', 'is_read_only', 'email_verified', 'used', 'encrypted'].includes(k)) {
+        if (isUsingPostgres()) {
+          return Boolean(val);
+        }
+        return val ? 1 : 0;
+      }
+      return val;
+    });
+
+    let sql = `INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`;
+    if (onConflict) {
+      sql += ` ${onConflict}`;
+    }
+    return dbExecute(sql, values);
+  },
+
+  // Generic Update Helper
+  async update(table: string, data: Record<string, any>, whereClause: string, whereParams: any[] = []): Promise<{ rowCount: number }> {
+    const keys = Object.keys(data);
+    const setClause = keys.map((k) => `${k} = ?`).join(', ');
+    const values = keys.map((k) => {
+      const val = data[k];
+      if (['active', 'is_active', 'is_read_only', 'email_verified', 'used', 'encrypted'].includes(k)) {
+        if (isUsingPostgres()) {
+          return Boolean(val);
+        }
+        return val ? 1 : 0;
+      }
+      return val;
+    });
+
+    const sql = `UPDATE ${table} SET ${setClause} WHERE ${whereClause}`;
+    return dbExecute(sql, [...values, ...whereParams]);
+  },
+
+  // Generic Delete Helper
+  async delete(table: string, whereClause: string, whereParams: any[] = []): Promise<{ rowCount: number }> {
+    const sql = `DELETE FROM ${table} WHERE ${whereClause}`;
+    return dbExecute(sql, whereParams);
+  },
+
+  // Session Domain Adapter
+  session: {
+    async create(userId: string, businessId: string, durationDays = 7): Promise<string> {
+      const token = `sess_${crypto.randomBytes(32).toString('hex')}`;
+      const createdAt = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
+      await dbExecute(
+        'INSERT INTO sessions (token, user_id, business_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+        [token, userId, businessId, createdAt, expiresAt]
+      );
+      return token;
+    },
+
+    async get(token: string): Promise<any> {
+      return dbQueryOne(`
+        SELECT
+          s.token,
+          s.user_id,
+          s.business_id,
+          s.expires_at,
+          u.name as user_name,
+          u.email as user_email,
+          u.username,
+          u.role as user_role,
+          u.active as user_active,
+          u.data_json as user_data,
+          b.name as business_name,
+          b.plan as business_plan,
+          b.status as business_status
+        FROM sessions s
+        JOIN users u ON s.user_id = u.id
+        JOIN businesses b ON s.business_id = b.id
+        WHERE s.token = ?
+      `, [token]);
+    },
+
+    async invalidate(token: string): Promise<void> {
+      await dbExecute('DELETE FROM sessions WHERE token = ?', [token]);
+    },
+
+    async cleanExpired(): Promise<number> {
+      const now = new Date().toISOString();
+      const res = await dbExecute('DELETE FROM sessions WHERE expires_at <= ?', [now]);
+      return res.rowCount;
+    },
+  },
+
+  // Authentication Domain Adapter
+  auth: {
+    async findUserByIdentifier(identifier: string): Promise<any> {
+      const trimmed = String(identifier).trim().toLowerCase();
+      return dbQueryOne(`
+        SELECT u.*, b.name as business_name, b.plan as business_plan, b.status as business_status
+        FROM users u
+        JOIN businesses b ON u.business_id = b.id
+        WHERE LOWER(u.email) = ? OR LOWER(u.username) = ?
+      `, [trimmed, trimmed]);
+    },
+
+    async findUserById(userId: string): Promise<any> {
+      return dbQueryOne('SELECT id, business_id, name, email, role, active, data_json FROM users WHERE id = ?', [userId]);
+    },
+
+    async verifyMembership(businessId: string, email: string): Promise<any> {
+      const cleanEmail = String(email).trim().toLowerCase();
+      return dbQueryOne(`
+        SELECT u.id, u.role, u.active, b.name as business_name, b.plan as business_plan, b.status as business_status
+        FROM users u
+        JOIN businesses b ON u.business_id = b.id
+        WHERE u.business_id = ? AND LOWER(u.email) = ? AND (u.active = TRUE OR u.active = 1)
+      `, [businessId, cleanEmail]);
+    },
+
+    async updateLastLogin(userId: string, lastLogin?: string): Promise<void> {
+      const ts = lastLogin || new Date().toISOString().replace('T', ' ').substring(0, 16);
+      await dbExecute('UPDATE users SET last_login = ? WHERE id = ?', [ts, userId]);
+    },
+
+    async createResetToken(userId: string, token: string, expiresAt: string): Promise<void> {
+      const id = `pwd_tok_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+      const now = new Date().toISOString();
+      const usedVal = isUsingPostgres() ? false : 0;
+      await dbExecute(
+        'INSERT INTO password_reset_tokens (id, user_id, token, expires_at, used, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [id, userId, token, expiresAt, usedVal, now]
+      );
+    },
+
+    async getResetToken(token: string): Promise<any> {
+      return dbQueryOne('SELECT id, user_id, expires_at, used FROM password_reset_tokens WHERE token = ?', [token]);
+    },
+
+    async markResetTokenUsed(tokenId: string): Promise<void> {
+      const usedVal = isUsingPostgres() ? true : 1;
+      await dbExecute('UPDATE password_reset_tokens SET used = ? WHERE id = ?', [usedVal, tokenId]);
+    },
+
+    async updateUserPassword(userId: string, passwordHash: string, salt: string): Promise<void> {
+      await dbExecute('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?', [passwordHash, salt, userId]);
+    },
+
+    async invalidateUserSessions(userId: string): Promise<void> {
+      await dbExecute('DELETE FROM sessions WHERE user_id = ?', [userId]);
+    },
+  },
+
+  // Audit Domain Adapter
+  audit: {
+    async logSecurity(event: any): Promise<void> {
+      const id = `sec_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+      const timestamp = new Date().toISOString();
+      const ip = event.ipAddress || '127.0.0.1';
+      const cleanIp = ip === '::1' || ip === '::ffff:127.0.0.1' ? '127.0.0.1' : ip.replace(/^::ffff:/, '').substring(0, 45);
+      const cleanUa = (event.userAgent || 'Unknown Client').replace(/[^\x20-\x7E]/g, '').substring(0, 200);
+
+      const params = [
+        id,
+        event.businessId || null,
+        event.userId || null,
+        event.userName || null,
+        event.userEmail || null,
+        event.userRole || null,
+        event.action,
+        event.category,
+        event.result,
+        cleanIp,
+        cleanUa,
+        event.details || null,
+        event.metadata ? JSON.stringify(event.metadata) : null,
+        timestamp,
+      ];
+
+      await dbExecute(`
+        INSERT INTO security_audit_logs (
+          id, business_id, user_id, user_name, user_email, user_role,
+          action, category, result, ip_address, user_agent, details, metadata_json, timestamp
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, params).catch((err) => {
+        console.error('[SecurityAudit] Failed to persist log:', err.message);
+      });
+    },
+
+    async logBusiness(event: any): Promise<void> {
+      const id = `act_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+      const timestamp = new Date().toISOString();
+      const ip = event.ipAddress || '127.0.0.1';
+      const cleanIp = ip === '::1' || ip === '::ffff:127.0.0.1' ? '127.0.0.1' : ip.replace(/^::ffff:/, '').substring(0, 45);
+
+      const logRecord = {
+        id,
+        businessId: event.businessId,
+        tenantId: event.businessId,
+        userId: event.userId,
+        userName: event.userName,
+        action: event.action,
+        type: event.action,
+        module: event.module,
+        details: event.details,
+        timestamp,
+        ipAddress: cleanIp,
+        metadata: event.metadata || null,
+      };
+
+      await dbExecute(`
+        INSERT INTO activity_logs (id, business_id, user_id, action, module, timestamp, data_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id,
+        event.businessId,
+        event.userId,
+        event.action,
+        event.module,
+        timestamp,
+        JSON.stringify(logRecord),
+      ]).catch((err) => {
+        console.error('[ActivityLog] Failed to persist log:', err.message);
+      });
+    },
+
+    async logAdmin(
+      actorUserId: string,
+      actorName: string,
+      actorRole: string,
+      action: string,
+      targetType: string,
+      targetId: string,
+      businessId?: string,
+      metadata?: Record<string, any>
+    ): Promise<void> {
+      const id = `adm_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+      const timestamp = new Date().toISOString();
+
+      await dbExecute(`
+        INSERT INTO admin_audit_logs (
+          id, actor_user_id, actor_name, actor_role, business_id, action, target_type, target_id, timestamp, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id,
+        actorUserId,
+        actorName,
+        actorRole,
+        businessId || null,
+        action,
+        targetType,
+        targetId || 'global',
+        timestamp,
+        metadata ? JSON.stringify(metadata) : null,
+      ]).catch((err) => {
+        console.error('[AdminAuditLog] Failed to persist log:', err.message);
+      });
+    },
+  },
+};
 
 // ============================================================================
 // 4. TRANSPARENT COMPATIBILITY PROXY FOR db.prepare(...)
@@ -150,29 +529,12 @@ export const db = {
         return stmt.all(...params);
       },
       run(...params: any[]) {
-        const result = stmt.run(...params);
-        // If PostgreSQL is active, asynchronously mirror mutations to ensure persistence
-        const pool = getPgPool();
-        if (pool) {
-          const pgSql = convertSqlForPg(sql);
-          pool.query(pgSql, params).catch((err) => {
-            // Log mutation sync error without crashing sync caller
-            console.error('[PostgreSQL Async Sync Error]', {
-              sql: pgSql,
-              message: err.message,
-            });
-          });
-        }
-        return result;
+        return stmt.run(...params);
       },
     };
   },
   exec(sql: string) {
     sqliteDb.exec(sql);
-    const pool = getPgPool();
-    if (pool) {
-      pool.query(sql).catch(() => {});
-    }
   },
 };
 
@@ -555,46 +917,9 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_backups_retention ON system_backups(retention_expires_at);
   `);
 
-  ensurePlatformAndPlansSeeded();
-  seedIfEmpty();
-
-  // If PostgreSQL is configured, verify and populate in-memory mirror asynchronously
-  if (hasDatabaseUrl) {
-    syncFromPostgres().catch((err) => {
-      console.error('[Database] Failed to initial sync from PostgreSQL:', err.message);
-    });
-  }
-}
-
-async function syncFromPostgres() {
-  const pool = getPgPool();
-  if (!pool) return;
-  try {
-    const bizRes = await pool.query('SELECT * FROM businesses');
-    if (bizRes.rows.length > 0) {
-      for (const b of bizRes.rows) {
-        try {
-          sqliteDb.prepare(`
-            INSERT OR REPLACE INTO businesses (id, name, code, industry, plan, logo_text, status, currency, business_type, onboarding_status, onboarding_step, created_at, data_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(b.id, b.name, b.code, b.industry, b.plan, b.logo_text, b.status, b.currency, b.business_type || 'F&B / Kuliner', b.onboarding_status || 'NOT_STARTED', b.onboarding_step || 1, String(b.created_at), typeof b.data_json === 'string' ? b.data_json : JSON.stringify(b.data_json));
-        } catch {}
-      }
-    }
-
-    const userRes = await pool.query('SELECT * FROM users');
-    if (userRes.rows.length > 0) {
-      for (const u of userRes.rows) {
-        try {
-          sqliteDb.prepare(`
-            INSERT OR REPLACE INTO users (id, business_id, name, username, email, password_hash, salt, role, active, email_verified, last_login, created_at, data_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(u.id, u.business_id, u.name, u.username, u.email, u.password_hash, u.salt, u.role, u.active ? 1 : 0, u.email_verified ? 1 : 0, u.last_login ? String(u.last_login) : null, String(u.created_at), typeof u.data_json === 'string' ? u.data_json : JSON.stringify(u.data_json));
-        } catch {}
-      }
-    }
-  } catch (err: any) {
-    console.warn('[Database] Cold start cache sync from PostgreSQL:', err.message);
+  if (!hasDatabaseUrl) {
+    ensurePlatformAndPlansSeeded();
+    seedIfEmpty();
   }
 }
 
@@ -611,29 +936,9 @@ export function logAdminAudit(
   businessId?: string,
   metadata?: Record<string, any>
 ) {
-  try {
-    const id = `audit_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    const timestamp = new Date().toISOString();
-    db.prepare(`
-      INSERT INTO admin_audit_logs (
-        id, actor_user_id, actor_name, actor_role, business_id,
-        action, target_type, target_id, timestamp, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id,
-      actorUserId,
-      actorName,
-      actorRole,
-      businessId || null,
-      action,
-      targetType,
-      targetId,
-      timestamp,
-      metadata ? JSON.stringify(metadata) : null
-    );
-  } catch (err) {
+  dbAdapter.audit.logAdmin(actorUserId, actorName, actorRole, action, targetType, targetId, businessId, metadata).catch((err) => {
     console.error('[AdminAudit] Failed to record log:', err);
-  }
+  });
 }
 
 function ensurePlatformAndPlansSeeded() {

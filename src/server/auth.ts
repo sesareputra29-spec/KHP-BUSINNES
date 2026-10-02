@@ -1,11 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
-import { db, hashPasswordServer, generateSaltServer, verifyPasswordServer, dbQueryOne, dbExecute, isUsingPostgres } from './db';
+import { dbAdapter, hashPasswordServer, generateSaltServer, verifyPasswordServer, isUsingPostgres } from './db';
 import crypto from 'node:crypto';
 import { UserProfile, FeatureKey, SaaSSubscriptionStatus, PlanLimits } from '../types';
 import {
   evaluateSubscriptionLifecycle,
-  checkFeatureEntitlement,
-  checkResourceLimit,
+  checkFeatureEntitlementAsync,
+  checkResourceLimitAsync,
 } from './entitlements';
 
 export interface AuthContext {
@@ -50,30 +50,11 @@ declare global {
 }
 
 export async function createSession(userId: string, businessId: string, durationDays = 7): Promise<string> {
-  // Cryptographically secure 32-byte session token
-  const token = `sess_${crypto.randomBytes(32).toString('hex')}`;
-  const createdAt = new Date().toISOString();
-  const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
-
-  if (isUsingPostgres()) {
-    await dbExecute(
-      'INSERT INTO sessions (token, user_id, business_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
-      [token, userId, businessId, createdAt, expiresAt]
-    );
-  }
-  db.prepare(`
-    INSERT INTO sessions (token, user_id, business_id, created_at, expires_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(token, userId, businessId, createdAt, expiresAt);
-
-  return token;
+  return dbAdapter.session.create(userId, businessId, durationDays);
 }
 
 export async function invalidateSession(token: string): Promise<void> {
-  if (isUsingPostgres()) {
-    await dbExecute('DELETE FROM sessions WHERE token = ?', [token]);
-  }
-  db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+  await dbAdapter.session.invalidate(token);
 }
 
 export async function authenticate(req: Request, res: Response, next: NextFunction) {
@@ -94,50 +75,7 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
   }
 
   try {
-    let row: any = null;
-    if (isUsingPostgres()) {
-      row = await dbQueryOne(`
-        SELECT
-          s.token,
-          s.user_id,
-          s.business_id,
-          s.expires_at,
-          u.name as user_name,
-          u.email as user_email,
-          u.username,
-          u.role as user_role,
-          u.active as user_active,
-          u.data_json as user_data,
-          b.name as business_name,
-          b.plan as business_plan,
-          b.status as business_status
-        FROM sessions s
-        JOIN users u ON s.user_id = u.id
-        JOIN businesses b ON s.business_id = b.id
-        WHERE s.token = ?
-      `, [token]);
-    } else {
-      row = db.prepare(`
-        SELECT
-          s.token,
-          s.user_id,
-          s.business_id,
-          s.expires_at,
-          u.name as user_name,
-          u.email as user_email,
-          u.username,
-          u.role as user_role,
-          u.active as user_active,
-          u.data_json as user_data,
-          b.name as business_name,
-          b.plan as business_plan,
-          b.status as business_status
-        FROM sessions s
-        JOIN users u ON s.user_id = u.id
-        JOIN businesses b ON s.business_id = b.id
-        WHERE s.token = ?
-      `).get(token) as any;
-    }
+    const row = await dbAdapter.session.get(token);
 
     if (!row) {
       return res.status(401).json({
@@ -187,12 +125,7 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     if (requestedBusinessId && requestedBusinessId !== row.business_id) {
       if (row.user_role === 'SUPER_ADMIN') {
         // Super Admin has platform-level oversight
-        let targetBiz: any = null;
-        if (isUsingPostgres()) {
-          targetBiz = await dbQueryOne('SELECT id, name, plan, status FROM businesses WHERE id = ?', [requestedBusinessId]);
-        } else {
-          targetBiz = db.prepare('SELECT id, name, plan, status FROM businesses WHERE id = ?').get(requestedBusinessId) as any;
-        }
+        const targetBiz = await dbAdapter.queryOne('SELECT id, name, plan, status FROM businesses WHERE id = ?', [requestedBusinessId]);
         if (!targetBiz) {
           return res.status(404).json({ error: 'NotFound', message: 'Bisnis target tidak ditemukan.' });
         }
@@ -201,22 +134,7 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
         activeBusinessPlan = targetBiz.plan;
       } else {
         // Regular user: Server-side validation of active membership in requested business
-        let membership: any = null;
-        if (isUsingPostgres()) {
-          membership = await dbQueryOne(`
-            SELECT u.id, u.role, u.active, b.name as business_name, b.plan as business_plan, b.status as business_status
-            FROM users u
-            JOIN businesses b ON u.business_id = b.id
-            WHERE u.business_id = ? AND LOWER(u.email) = ? AND (u.active = 1 OR u.active = true)
-          `, [requestedBusinessId, row.user_email.toLowerCase()]);
-        } else {
-          membership = db.prepare(`
-            SELECT u.id, u.role, u.active, b.name as business_name, b.plan as business_plan, b.status as business_status
-            FROM users u
-            JOIN businesses b ON u.business_id = b.id
-            WHERE u.business_id = ? AND LOWER(u.email) = ? AND u.active = 1
-          `).get(requestedBusinessId, row.user_email.toLowerCase()) as any;
-        }
+        const membership = await dbAdapter.auth.verifyMembership(requestedBusinessId, row.user_email);
 
         if (!membership) {
           // User A -> Business B: DITOLAK (Strict isolation)
@@ -280,7 +198,7 @@ export function requireSuperAdmin(req: Request, res: Response, next: NextFunctio
   next();
 }
 
-export function enforceSubscriptionAccess(req: Request, res: Response, next: NextFunction) {
+export async function enforceSubscriptionAccess(req: Request, res: Response, next: NextFunction) {
   if (!req.auth) {
     return res.status(401).json({ error: 'Unauthorized', message: 'Otentikasi diperlukan.' });
   }
@@ -296,7 +214,7 @@ export function enforceSubscriptionAccess(req: Request, res: Response, next: Nex
   }
 
   // 1. Check business status
-  const bizRow = db.prepare('SELECT status, data_json FROM businesses WHERE id = ?').get(bizId) as any;
+  const bizRow = await dbAdapter.queryOne('SELECT status, data_json FROM businesses WHERE id = ?', [bizId]);
   if (!bizRow) {
     return res.status(404).json({ error: 'NotFound', message: 'Data bisnis tidak ditemukan.' });
   }
@@ -310,7 +228,7 @@ export function enforceSubscriptionAccess(req: Request, res: Response, next: Nex
   }
 
   // 2. Fetch active subscription with plan features and limits
-  let subRow = db.prepare(`
+  let subRow = await dbAdapter.queryOne(`
     SELECT
       s.*,
       p.code as plan_code,
@@ -322,26 +240,27 @@ export function enforceSubscriptionAccess(req: Request, res: Response, next: Nex
     WHERE s.business_id = ?
     ORDER BY s.created_at DESC
     LIMIT 1
-  `).get(bizId) as any;
+  `, [bizId]);
 
   // Fallback: If no subscription record exists yet, create trial subscription on STARTER
   if (!subRow) {
     const now = new Date();
     const trialEnd = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
     const subId = `sub_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
-    db.prepare(`
+    const readOnlyVal = isUsingPostgres() ? false : 0;
+    await dbAdapter.execute(`
       INSERT INTO subscriptions (
         id, business_id, plan_id, status, billing_cycle,
         start_date, end_date, trial_start, trial_end, is_read_only, notes, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(subId, bizId, 'plan_starter', 'TRIAL', 'MONTHLY', now.toISOString(), trialEnd, now.toISOString(), trialEnd, 0, 'Auto-provisioned trial', now.toISOString(), now.toISOString());
+    `, [subId, bizId, 'plan_starter', 'TRIAL', 'MONTHLY', now.toISOString(), trialEnd, now.toISOString(), trialEnd, readOnlyVal, 'Auto-provisioned trial', now.toISOString(), now.toISOString()]);
 
-    subRow = db.prepare(`
+    subRow = await dbAdapter.queryOne(`
       SELECT s.*, p.code as plan_code, p.name as plan_name, p.features_json, p.limits_json
       FROM subscriptions s
       JOIN plans p ON s.plan_id = p.id
       WHERE s.id = ?
-    `).get(subId) as any;
+    `, [subId]);
   }
 
   // 3. Centralized Lifecycle Evaluation (TRIAL, ACTIVE, PAST_DUE, EXPIRED, CANCELLED, SUSPENDED)
@@ -403,7 +322,7 @@ export function enforceSubscriptionAccess(req: Request, res: Response, next: Nex
 }
 
 export function requireFeature(feature: FeatureKey) {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     // Super Admin has all features
     if (req.auth?.userRole === 'SUPER_ADMIN') {
       return next();
@@ -414,7 +333,27 @@ export function requireFeature(feature: FeatureKey) {
       return res.status(400).json({ error: 'BadRequest', message: 'Business ID tidak valid.' });
     }
 
-    const check = checkFeatureEntitlement(bizId, feature);
+    if (req.subscription) {
+      if (req.subscription.isReadOnly && req.method !== 'GET') {
+        return res.status(403).json({
+          error: 'SUBSCRIPTION_EXPIRED_READ_ONLY',
+          status: req.subscription.status,
+          isReadOnly: true,
+          message: 'Masa aktif langganan atau trial bisnis Anda telah berakhir (Mode Baca-Saja).',
+        });
+      }
+      if (!req.subscription.features.includes(feature)) {
+        return res.status(403).json({
+          error: 'FEATURE_NOT_AVAILABLE',
+          feature,
+          currentPlan: req.subscription.planCode,
+          message: `Fitur '${feature}' tidak tersedia pada paket Anda (${req.subscription.planName}). Silakan tingkatkan paket Anda.`,
+        });
+      }
+      return next();
+    }
+
+    const check = await checkFeatureEntitlementAsync(bizId, feature);
     if (!check.allowed) {
       return res.status(403).json({
         error: 'FEATURE_NOT_AVAILABLE',
@@ -429,7 +368,7 @@ export function requireFeature(feature: FeatureKey) {
 }
 
 export function requireResourceLimit(resource: 'users' | 'products' | 'raw_materials' | 'boms' | 'batches') {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     if (req.auth?.userRole === 'SUPER_ADMIN') {
       return next();
     }
@@ -437,7 +376,12 @@ export function requireResourceLimit(resource: 'users' | 'products' | 'raw_mater
     const bizId = req.businessId;
     if (!bizId) return next();
 
-    const limitCheck = checkResourceLimit(bizId, resource);
+    const limitCheck = await checkResourceLimitAsync(
+      bizId,
+      resource,
+      req.subscription?.limits,
+      req.subscription?.planCode
+    );
     if (!limitCheck.allowed) {
       return res.status(403).json({
         error: 'PLAN_LIMIT_REACHED',
@@ -505,30 +449,17 @@ export function logAudit(
   details: string,
   ipAddress = '127.0.0.1'
 ) {
-  try {
-    const id = `log_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    const timestamp = new Date().toISOString();
-    const item = {
-      id,
-      businessId,
-      tenantId: businessId,
-      userId,
-      userName,
-      action,
-      type: action,
-      module,
-      details,
-      timestamp,
-      ipAddress,
-    };
-
-    db.prepare(`
-      INSERT INTO activity_logs (id, business_id, user_id, action, module, timestamp, data_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, businessId, userId, action, module, timestamp, JSON.stringify(item));
-  } catch (err) {
-    console.error('[AuditLog] Failed to write log:', err);
-  }
+  dbAdapter.audit.logBusiness({
+    businessId,
+    userId,
+    userName,
+    action,
+    module,
+    details,
+    ipAddress,
+  }).catch((err) => {
+    console.error('[AuditLog] Failed to persist log:', err);
+  });
 }
 
 export { logAdminAudit } from './audit';
